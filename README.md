@@ -209,3 +209,18 @@ Belangrijke architectuurkeuzes:
 - Git-repo lokaal geïnitialiseerd
 - GitHub remote gekoppeld aan `origin`
 - README bevat de eerste projectrichting
+- basis Docker stack voorzien voor `frontend`, `backend` en `db`
+
+## Lokale Start
+
+Start de ontwikkelomgeving met:
+
+```bash
+docker compose up --build
+```
+
+Na het opstarten:
+
+- frontend: `http://localhost:5173`
+- backend: `http://localhost:8000/health`
+- database: `localhost:5432`
