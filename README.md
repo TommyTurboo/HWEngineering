@@ -50,6 +50,7 @@ Buiten scope voor V1:
 - `EquipmentTypical`
 - `TypicalVersion`
 - `TypicalParameter`
+- `TypicalParameterDefinition`
 - `TypicalInterface`
 - `InterfaceRule`
 - `TypicalConstraint`
@@ -78,12 +79,69 @@ De Equipment Typical-laag levert:
 
 - engineeringnaam en interne code
 - selectie van relevante parameters
+- governance op parameterniveau
 - defaultwaarden
 - required versus optional
 - interfacegedrag
 - validatieregels
 - overrides
 - versiebeheer
+
+### ETIM als bron, niet als invoervorm
+
+ETIM bepaalt welke kenmerken bestaan, maar niet automatisch hoe de gebruiker ze
+mag invullen.
+
+Daarom komt er tussen `EtimFeature` en `TypicalParameter` een extra laag:
+
+- `TypicalParameterDefinition`
+
+Die laag bepaalt per geselecteerde ETIM-feature:
+
+- wordt deze feature opgenomen in de typical of niet
+- is de invoervorm `enum`, `boolean`, `fixed numeric list`, `range` of `fixed value`
+- welke waarden zijn intern toegelaten
+- wat is de defaultwaarde
+- is het kenmerk parametriseerbaar
+- hoe mappen interne waarden terug naar de ETIM-semantiek
+
+Belangrijk principe:
+
+- **closed input by default**
+- vrije tekst of vrije numerieke invoer alleen als expliciete uitzondering
+
+Voorbeelden:
+
+- `Release characteristic`
+  - ETIM biedt mogelijk `A, B, C, D, K, Z, Other`
+  - de typicalbibliotheek kan dat beperken tot `B, C, D`
+- `Number of poles (total)`
+  - ETIM zegt numeriek
+  - de bibliotheek maakt hiervan een enum `1, 2, 3, 4`
+- `Rated current`
+  - ETIM zegt numeriek in `A`
+  - de bibliotheek maakt hiervan bijvoorbeeld een vaste keuzelijst
+    `2, 4, 6, 10, 16, 20, 25, 32, 40, 63`
+
+### Parameter governance
+
+De volgende modelstap wordt dus niet:
+
+- ETIM-features rechtstreeks als vrije parameters tonen
+
+maar:
+
+- ETIM-features selecteren
+- omzetten naar `TypicalParameterDefinitions`
+- en pas daarna een concrete typical parametriseren
+
+Aanbevolen standaardregels:
+
+- ETIM `A` -> standaard `enum`
+- ETIM `L` -> `boolean`
+- ETIM `N` -> alleen via beheerde lijst, range of vaste waarde
+- ETIM `R` -> alleen expliciet toelaten waar zinvol
+- vrije tekst standaard uitschakelen
 
 ### Interfaces
 
@@ -195,6 +253,13 @@ Belangrijke architectuurkeuzes:
 - UI verfijnen
 - auditlog en conflictbeheer toevoegen
 
+### Fase 4
+
+- ETIM-features per klasse tonen
+- featureselectie omzetten naar `TypicalParameterDefinitions`
+- invoertypes en toegelaten waarden beheren
+- interface-afleiding baseren op governed parameters in plaats van hardcoded local parameters
+
 ## Eerste Acceptatiecriteria
 
 - een automaat kan aangemaakt worden vanuit een ETIM-klasse
@@ -203,6 +268,7 @@ Belangrijke architectuurkeuzes:
 - een gebruiker kan een interface override toevoegen
 - validatie blokkeert release als verplichte parameters ontbreken
 - een released typical is readonly
+- parameterwaarden worden beheerd via gecontroleerde invoervormen in plaats van vrije tekst
 
 ## Huidige Status
 

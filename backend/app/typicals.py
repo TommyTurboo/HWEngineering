@@ -1,4 +1,5 @@
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from app.etim_repository import get_class_detail
@@ -115,7 +116,14 @@ def create_typical(db: Session, payload: EquipmentTypicalCreate) -> EquipmentTyp
     typical.interfaces = derive_interfaces(payload)
 
     db.add(typical)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise ValueError(
+            f"Typical code '{payload.code}' bestaat al. Kies een unieke code."
+        ) from exc
+
     db.refresh(typical)
     return get_typical(db, typical.id)
 

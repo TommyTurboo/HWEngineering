@@ -274,6 +274,7 @@ export default function App() {
                 <p className="helper-text">
                   Template: {inferTemplate(selectedClass) ?? "geen automatische template"}
                 </p>
+                {error ? <p className="error-message">{error}</p> : null}
                 <button disabled={!selectedClassId || submitting} onClick={handleCreateTypical} type="button">
                   {submitting ? "Aanmaken..." : "Maak Equipment Typical"}
                 </button>
