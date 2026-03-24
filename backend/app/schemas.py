@@ -85,6 +85,10 @@ class EquipmentTypicalCreate(BaseModel):
     parameters: list[TypicalParameterCreate] = Field(default_factory=list)
 
 
+class EquipmentTypicalUpdate(EquipmentTypicalCreate):
+    pass
+
+
 class EquipmentTypicalRead(BaseModel):
     id: str
     name: str

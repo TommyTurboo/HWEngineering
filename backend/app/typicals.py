@@ -4,13 +4,21 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.etim_repository import get_class_detail
 from app.models import EquipmentTypical, TypicalInterface, TypicalParameter
-from app.schemas import EquipmentTypicalCreate
+from app.schemas import EquipmentTypicalCreate, EquipmentTypicalUpdate
 
 
 def derive_interfaces(payload: EquipmentTypicalCreate) -> list[TypicalInterface]:
     pole_count = 1
     for parameter in payload.parameters:
-        if parameter.code.lower() in {"number_of_poles", "poles", "pole_count"} and parameter.value:
+        parameter_code = parameter.code.lower()
+        parameter_name = parameter.name.lower()
+        if (
+            parameter.value
+            and (
+                parameter_code in {"number_of_poles", "poles", "pole_count", "ef008618"}
+                or "number of poles" in parameter_name
+            )
+        ):
             try:
                 pole_count = max(1, int(parameter.value))
             except ValueError:
@@ -116,6 +124,56 @@ def create_typical(db: Session, payload: EquipmentTypicalCreate) -> EquipmentTyp
     typical.interfaces = derive_interfaces(payload)
 
     db.add(typical)
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise ValueError(
+            f"Typical code '{payload.code}' bestaat al. Kies een unieke code."
+        ) from exc
+
+    db.refresh(typical)
+    return get_typical(db, typical.id)
+
+
+def update_typical(db: Session, typical_id: str, payload: EquipmentTypicalUpdate) -> EquipmentTypical | None:
+    typical = db.get(EquipmentTypical, typical_id)
+    if typical is None:
+        return None
+
+    etim_class = get_class_detail(payload.etim_class_id)
+    if etim_class is None:
+        raise ValueError(f"Unknown ETIM class: {payload.etim_class_id}")
+
+    typical.name = payload.name
+    typical.code = payload.code
+    typical.description = payload.description
+    typical.etim_class_id = payload.etim_class_id
+    typical.etim_class_description = etim_class.description
+    typical.template_key = payload.template_key
+
+    typical.parameters.clear()
+    typical.parameters.extend(
+        [
+            TypicalParameter(
+                code=parameter.code,
+                name=parameter.name,
+                source=parameter.source,
+                data_type=parameter.data_type,
+                unit=parameter.unit,
+                value=parameter.value,
+                required=1 if parameter.required else 0,
+                is_parametrizable=1 if parameter.is_parametrizable else 0,
+                drives_interfaces=1 if parameter.drives_interfaces else 0,
+                sort_order=parameter.sort_order,
+            )
+            for parameter in payload.parameters
+        ]
+    )
+
+    typical.interfaces.clear()
+    typical.interfaces.extend(derive_interfaces(payload))
+
     try:
         db.commit()
     except IntegrityError as exc:

@@ -7,8 +7,8 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.database import Base, engine, get_db
 from app.etim_repository import get_class_detail, list_classes
-from app.schemas import EquipmentTypicalCreate, EquipmentTypicalListItem, EquipmentTypicalRead, EtimClassDetail, EtimClassSummary
-from app.typicals import create_typical, delete_typical, get_typical, list_typicals
+from app.schemas import EquipmentTypicalCreate, EquipmentTypicalListItem, EquipmentTypicalRead, EquipmentTypicalUpdate, EtimClassDetail, EtimClassSummary
+from app.typicals import create_typical, delete_typical, get_typical, list_typicals, update_typical
 
 
 @asynccontextmanager
@@ -76,6 +76,20 @@ def typicals_create(payload: EquipmentTypicalCreate, db: Session = Depends(get_d
 @app.get("/api/v1/typicals/{typical_id}", response_model=EquipmentTypicalRead)
 def typical_detail(typical_id: str, db: Session = Depends(get_db)) -> EquipmentTypicalRead:
     result = get_typical(db, typical_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Typical not found")
+    return result
+
+
+@app.put("/api/v1/typicals/{typical_id}", response_model=EquipmentTypicalRead)
+def typical_update(
+    typical_id: str, payload: EquipmentTypicalUpdate, db: Session = Depends(get_db)
+) -> EquipmentTypicalRead:
+    try:
+        result = update_typical(db, typical_id, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     if result is None:
         raise HTTPException(status_code=404, detail="Typical not found")
     return result
