@@ -137,3 +137,12 @@ def get_typical(db: Session, typical_id: str) -> EquipmentTypical | None:
     )
     return db.scalars(stmt).first()
 
+
+def delete_typical(db: Session, typical_id: str) -> bool:
+    typical = db.get(EquipmentTypical, typical_id)
+    if typical is None:
+        return False
+
+    db.delete(typical)
+    db.commit()
+    return True

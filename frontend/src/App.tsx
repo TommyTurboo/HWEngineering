@@ -24,6 +24,33 @@ type EquipmentTypical = {
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
 
+function slugify(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48);
+}
+
+function inferTemplate(etimClass: EtimClassSummary | undefined): string | null {
+  if (!etimClass) return null;
+  const description = etimClass.description.toLowerCase();
+
+  if (
+    description.includes("circuit breaker") ||
+    description.includes("disconnector") ||
+    description.includes("switch disconnector")
+  ) {
+    return "multi_pole_switch_device";
+  }
+
+  if (description.includes("power supply")) {
+    return "dc_power_supply";
+  }
+
+  return null;
+}
+
 export default function App() {
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -31,7 +58,17 @@ export default function App() {
   const [typicals, setTypicals] = useState<EquipmentTypical[]>([]);
   const [search, setSearch] = useState("circuit breaker");
   const [selectedClassId, setSelectedClassId] = useState("");
+  const [typicalName, setTypicalName] = useState("");
+  const [typicalCode, setTypicalCode] = useState("");
   const [submitting, setSubmitting] = useState(false);
+
+  const selectedClass = classes.find((item) => item.id === selectedClassId);
+
+  useEffect(() => {
+    if (!selectedClass) return;
+    setTypicalName(selectedClass.description);
+    setTypicalCode(`typ-${slugify(selectedClass.description)}-${selectedClass.id.toLowerCase()}`);
+  }, [selectedClassId, classes]);
 
   useEffect(() => {
     async function loadInitialData() {
@@ -82,23 +119,25 @@ export default function App() {
 
   async function handleCreateTypical() {
     if (!selectedClassId) return;
-    const selectedClass = classes.find((item) => item.id === selectedClassId);
     if (!selectedClass) return;
 
     setSubmitting(true);
     setError(null);
     try {
+      const templateKey = inferTemplate(selectedClass);
       const response = await fetch(`${apiBaseUrl}/api/v1/typicals`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          name: `Automaat ${selectedClass.id}`,
-          code: `MCB-${selectedClass.id}-${Date.now()}`,
-          description: "Eerste vertical slice typical",
+          name: typicalName.trim() || selectedClass.description,
+          code:
+            typicalCode.trim() ||
+            `typ-${slugify(selectedClass.description)}-${selectedClass.id.toLowerCase()}`,
+          description: `Typical gebaseerd op ${selectedClass.description}`,
           etim_class_id: selectedClass.id,
-          template_key: "multi_pole_switch_device",
+          template_key: templateKey,
           parameters: [
             {
               code: "number_of_poles",
@@ -140,6 +179,22 @@ export default function App() {
       setError(err instanceof Error ? err.message : "Unknown error");
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  async function handleDeleteTypical(typicalId: string) {
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/v1/typicals/${typicalId}`, {
+        method: "DELETE",
+      });
+
+      if (!response.ok) {
+        throw new Error("Delete typical failed");
+      }
+
+      setTypicals((current) => current.filter((item) => item.id !== typicalId));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unknown error");
     }
   }
 
@@ -198,9 +253,31 @@ export default function App() {
                   </label>
                 ))}
               </div>
-              <button disabled={!selectedClassId || submitting} onClick={handleCreateTypical} type="button">
-                {submitting ? "Aanmaken..." : "Maak automaat typical"}
-              </button>
+              <div className="editor-panel">
+                <h3>Nieuwe typical</h3>
+                <label className="field">
+                  <span>Naam</span>
+                  <input
+                    value={typicalName}
+                    onChange={(event) => setTypicalName(event.target.value)}
+                    placeholder="Naam van de typical"
+                  />
+                </label>
+                <label className="field">
+                  <span>Code</span>
+                  <input
+                    value={typicalCode}
+                    onChange={(event) => setTypicalCode(event.target.value)}
+                    placeholder="Interne code"
+                  />
+                </label>
+                <p className="helper-text">
+                  Template: {inferTemplate(selectedClass) ?? "geen automatische template"}
+                </p>
+                <button disabled={!selectedClassId || submitting} onClick={handleCreateTypical} type="button">
+                  {submitting ? "Aanmaken..." : "Maak Equipment Typical"}
+                </button>
+              </div>
             </div>
 
             <div>
@@ -211,11 +288,23 @@ export default function App() {
                 ) : (
                   typicals.map((item) => (
                     <article className="typical-card" key={item.id}>
-                      <strong>{item.name}</strong>
-                      <small>{item.code}</small>
-                      <small>
-                        {item.etim_class_id} · {item.status} · v{item.version}
-                      </small>
+                      <div className="typical-card-body">
+                        <strong>{item.name}</strong>
+                        <small>{item.code}</small>
+                        <small>
+                          {item.etim_class_id} · {item.etim_class_description}
+                        </small>
+                        <small>
+                          {item.status} · v{item.version}
+                        </small>
+                      </div>
+                      <button
+                        className="delete-button"
+                        onClick={() => handleDeleteTypical(item.id)}
+                        type="button"
+                      >
+                        Verwijder
+                      </button>
                     </article>
                   ))
                 )}

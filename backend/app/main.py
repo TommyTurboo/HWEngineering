@@ -8,7 +8,7 @@ from app.config import settings
 from app.database import Base, engine, get_db
 from app.etim_repository import get_class_detail, list_classes
 from app.schemas import EquipmentTypicalCreate, EquipmentTypicalListItem, EquipmentTypicalRead, EtimClassDetail, EtimClassSummary
-from app.typicals import create_typical, get_typical, list_typicals
+from app.typicals import create_typical, delete_typical, get_typical, list_typicals
 
 
 @asynccontextmanager
@@ -79,3 +79,10 @@ def typical_detail(typical_id: str, db: Session = Depends(get_db)) -> EquipmentT
     if result is None:
         raise HTTPException(status_code=404, detail="Typical not found")
     return result
+
+
+@app.delete("/api/v1/typicals/{typical_id}", status_code=204)
+def typical_delete(typical_id: str, db: Session = Depends(get_db)) -> None:
+    deleted = delete_typical(db, typical_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Typical not found")
