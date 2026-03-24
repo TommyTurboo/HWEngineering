@@ -12,7 +12,7 @@ class EtimClassSummary(BaseModel):
 
 class EtimFeatureOption(BaseModel):
     value_id: str
-    value_description: str
+    value_description: str | None = None
     sort_order: int | None = None
 
 
@@ -116,4 +116,3 @@ class EquipmentTypicalListItem(BaseModel):
 
     class Config:
         from_attributes = True
-

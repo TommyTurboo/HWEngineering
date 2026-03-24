@@ -98,7 +98,7 @@ def get_class_detail(art_class_id: str) -> EtimClassDetail | None:
         values_by_feature[row["ARTCLASSFEATURENR"]].append(
             EtimFeatureOption(
                 value_id=row["VALUEID"],
-                value_description=row["VALUEDESC"],
+                value_description=row["VALUEDESC"] or row["VALUEID"],
                 sort_order=row["SORTNR"],
             )
         )
@@ -126,4 +126,3 @@ def get_class_detail(art_class_id: str) -> EtimClassDetail | None:
         group_id=class_row["ARTGROUPID"],
         features=features,
     )
-
