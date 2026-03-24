@@ -22,11 +22,13 @@ services:
     container_name: hwengineering-backend
     environment:
       APP_ENV: development
-      DATABASE_URL: postgresql://hwengineering:hwengineering@db:5432/hwengineering
+      DATABASE_URL: postgresql+psycopg://hwengineering:hwengineering@db:5432/hwengineering
+      ETIM_DB_PATH: /data/ETIM.db
     ports:
       - "8000:8000"
     volumes:
       - ./backend:/app
+      - ./data:/data:ro
     depends_on:
       db:
         condition: service_healthy
@@ -47,4 +49,3 @@ services:
 
 volumes:
   postgres_data:
-
