@@ -8,6 +8,6 @@ __pycache__/
 .mypy_cache/
 node_modules/
 dist/
+*.tsbuildinfo
 .DS_Store
 Thumbs.db
-

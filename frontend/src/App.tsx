@@ -44,6 +44,7 @@ type GovernedParameterDefinition = {
   unit: string | null;
   default_value: string;
   allowed_values: string[];
+  allowed_values_text: string;
   required: boolean;
   is_parametrizable: boolean;
   drives_interfaces: boolean;
@@ -211,6 +212,7 @@ function createDefinitionFromFeature(feature: EtimFeatureDetail): GovernedParame
     unit: feature.unit_description,
     default_value: defaultFeatureValue(feature),
     allowed_values: allowedValues,
+    allowed_values_text: allowedValues.join(", "),
     required: false,
     is_parametrizable: true,
     drives_interfaces: name.toLowerCase() === "number of poles (total)",
@@ -237,11 +239,47 @@ function normalizeDefinition(
     unit: definition.unit,
     default_value: definition.default_value ?? "",
     allowed_values: definition.allowed_values ?? [],
+    allowed_values_text: (definition.allowed_values ?? []).join(", "),
     required: definition.required === 1,
     is_parametrizable: definition.is_parametrizable === 1,
     drives_interfaces: definition.drives_interfaces === 1,
     sort_order: definition.sort_order,
   };
+}
+
+function serializeEditorState(args: {
+  mode: "create" | "edit";
+  selectedTypicalId: string | null;
+  selectedClassId: string;
+  typicalName: string;
+  typicalCode: string;
+  typicalDescription: string;
+  definitions: GovernedParameterDefinition[];
+}): string {
+  return JSON.stringify({
+    mode: args.mode,
+    selectedTypicalId: args.selectedTypicalId,
+    selectedClassId: args.selectedClassId,
+    typicalName: args.typicalName,
+    typicalCode: args.typicalCode,
+    typicalDescription: args.typicalDescription,
+    definitions: args.definitions
+      .map((definition) => ({
+        feature_key: definition.feature_key,
+        code: definition.code,
+        name: definition.name,
+        source: definition.source,
+        input_type: definition.input_type,
+        unit: definition.unit,
+        default_value: definition.default_value,
+        allowed_values: definition.allowed_values,
+        required: definition.required,
+        is_parametrizable: definition.is_parametrizable,
+        drives_interfaces: definition.drives_interfaces,
+        sort_order: definition.sort_order,
+      }))
+      .sort((left, right) => left.sort_order - right.sort_order),
+  });
 }
 
 export default function App() {
@@ -260,12 +298,43 @@ export default function App() {
   const [definitions, setDefinitions] = useState<GovernedParameterDefinition[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [loadingTypical, setLoadingTypical] = useState(false);
+  const [savedSnapshot, setSavedSnapshot] = useState("");
 
-  const selectedClass = classes.find((item) => item.id === selectedClassId);
+  const selectedClass =
+    classes.find((item) => item.id === selectedClassId) ??
+    (classDetail
+      ? {
+          id: classDetail.id,
+          description: classDetail.description,
+          version: classDetail.version,
+          group_id: classDetail.group_id,
+        }
+      : undefined);
   const selectedFeatureKeys = useMemo(
     () => definitions.map((definition) => definition.feature_key),
     [definitions],
   );
+  const currentSnapshot = useMemo(
+    () =>
+      serializeEditorState({
+        mode,
+        selectedTypicalId,
+        selectedClassId,
+        typicalName,
+        typicalCode,
+        typicalDescription,
+        definitions,
+      }),
+    [definitions, mode, selectedClassId, selectedTypicalId, typicalCode, typicalDescription, typicalName],
+  );
+  const isDirty = savedSnapshot !== "" && currentSnapshot !== savedSnapshot;
+
+  function confirmDiscardChanges() {
+    if (!isDirty) {
+      return true;
+    }
+    return window.confirm("Je hebt niet-opgeslagen wijzigingen. Wil je deze verlaten?");
+  }
 
   useEffect(() => {
     async function loadInitialData() {
@@ -291,6 +360,17 @@ export default function App() {
         if (classesPayload.length > 0) {
           setSelectedClassId(classesPayload[0].id);
         }
+        setSavedSnapshot(
+          serializeEditorState({
+            mode: "create",
+            selectedTypicalId: null,
+            selectedClassId: classesPayload[0]?.id ?? "",
+            typicalName: "",
+            typicalCode: "",
+            typicalDescription: "",
+            definitions: [],
+          }),
+        );
       } catch (err) {
         setError(err instanceof Error ? err.message : "Unknown error");
       }
@@ -342,6 +422,29 @@ export default function App() {
     setTypicalDescription(`Typical gebaseerd op ${selectedClass.description}`);
   }, [selectedClass, mode]);
 
+  useEffect(() => {
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (!isDirty) {
+        return;
+      }
+      event.preventDefault();
+      event.returnValue = "";
+    };
+
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, [isDirty]);
+
+  useEffect(() => {
+    if (savedSnapshot !== "") {
+      return;
+    }
+    if (mode !== "create" || selectedTypicalId !== null || !selectedClassId) {
+      return;
+    }
+    setSavedSnapshot(currentSnapshot);
+  }, [currentSnapshot, mode, savedSnapshot, selectedClassId, selectedTypicalId]);
+
   async function refreshTypicals(selectedId?: string | null) {
     const listResponse = await fetch(`${apiBaseUrl}/api/v1/typicals`);
     if (!listResponse.ok) {
@@ -356,6 +459,9 @@ export default function App() {
 
   async function handleSearch(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!confirmDiscardChanges()) {
+      return;
+    }
     const response = await fetch(
       `${apiBaseUrl}/api/v1/etim/classes?search=${encodeURIComponent(search)}&limit=12`,
     );
@@ -367,6 +473,7 @@ export default function App() {
         setSelectedTypicalId(null);
       }
     }
+    setSavedSnapshot("");
   }
 
   function buildPayload() {
@@ -399,7 +506,10 @@ export default function App() {
   }
 
   async function handleSaveTypical() {
-    if (!selectedClassId || !selectedClass) return;
+    if (!selectedClassId || !selectedClass) {
+      setError("De geselecteerde ETIM-klasse is niet geladen.");
+      return;
+    }
 
     const payload = buildPayload();
     if (!payload) return;
@@ -433,7 +543,7 @@ export default function App() {
       const saved = (await response.json()) as EquipmentTypicalDetail;
       await refreshTypicals(saved.id);
       setMode("edit");
-      await handleEditTypical(saved.id);
+      await handleEditTypical(saved.id, true);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unknown error");
     } finally {
@@ -464,7 +574,10 @@ export default function App() {
     );
   }
 
-  async function handleEditTypical(typicalId: string) {
+  async function handleEditTypical(typicalId: string, skipDirtyCheck = false) {
+    if (!skipDirtyCheck && !confirmDiscardChanges()) {
+      return;
+    }
     setError(null);
     setLoadingTypical(true);
     try {
@@ -501,13 +614,26 @@ export default function App() {
               unit: parameter.unit,
               default_value: parameter.value ?? "",
               allowed_values: [],
+              allowed_values_text: "",
               required: parameter.required === 1,
               is_parametrizable: parameter.is_parametrizable === 1,
               drives_interfaces: parameter.drives_interfaces === 1,
               sort_order: parameter.sort_order,
             }));
 
-      setDefinitions(nextDefinitions.sort((left, right) => left.sort_order - right.sort_order));
+      const sortedDefinitions = nextDefinitions.sort((left, right) => left.sort_order - right.sort_order);
+      setDefinitions(sortedDefinitions);
+      setSavedSnapshot(
+        serializeEditorState({
+          mode: "edit",
+          selectedTypicalId: payload.id,
+          selectedClassId: payload.etim_class_id,
+          typicalName: payload.name,
+          typicalCode: payload.code,
+          typicalDescription: payload.description ?? "",
+          definitions: sortedDefinitions,
+        }),
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unknown error");
     } finally {
@@ -516,24 +642,48 @@ export default function App() {
   }
 
   function handleNewTypical() {
+    if (!confirmDiscardChanges()) {
+      return;
+    }
     setMode("create");
     setSelectedTypicalId(null);
     setError(null);
     if (selectedClass && classDetail) {
+      const recommended = new Set(recommendedFeatures(selectedClass, classDetail));
+      const nextDefinitions = classDetail.features
+        .filter((feature) => recommended.has(feature.art_class_feature_nr))
+        .map(createDefinitionFromFeature);
       setTypicalName(selectedClass.description);
       setTypicalCode(`typ-${slugify(selectedClass.description)}-${selectedClass.id.toLowerCase()}`);
       setTypicalDescription(`Typical gebaseerd op ${selectedClass.description}`);
-      const recommended = new Set(recommendedFeatures(selectedClass, classDetail));
-      setDefinitions(
-        classDetail.features
-          .filter((feature) => recommended.has(feature.art_class_feature_nr))
-          .map(createDefinitionFromFeature),
+      setDefinitions(nextDefinitions);
+      setSavedSnapshot(
+        serializeEditorState({
+          mode: "create",
+          selectedTypicalId: null,
+          selectedClassId,
+          typicalName: selectedClass.description,
+          typicalCode: `typ-${slugify(selectedClass.description)}-${selectedClass.id.toLowerCase()}`,
+          typicalDescription: `Typical gebaseerd op ${selectedClass.description}`,
+          definitions: nextDefinitions,
+        }),
       );
     } else {
       setTypicalName("");
       setTypicalCode("");
       setTypicalDescription("");
       setDefinitions([]);
+      setSavedSnapshot(
+        serializeEditorState({
+          mode: "create",
+          selectedTypicalId: null,
+          selectedClassId,
+          typicalName: "",
+          typicalCode: "",
+          typicalDescription: "",
+          definitions: [],
+        }),
+      );
     }
   }
 
@@ -601,7 +751,13 @@ export default function App() {
                     <input
                       checked={selectedClassId === item.id}
                       name="selected-class"
-                      onChange={() => setSelectedClassId(item.id)}
+                      onChange={() => {
+                        if (!confirmDiscardChanges()) {
+                          return;
+                        }
+                        setSelectedClassId(item.id);
+                        setSavedSnapshot("");
+                      }}
                       type="radio"
                     />
                     <span>
@@ -649,6 +805,7 @@ export default function App() {
                 <p className="helper-text">
                   Geselecteerde parameterdefinities: {definitions.length}
                 </p>
+                {isDirty ? <p className="dirty-message">Niet-opgeslagen wijzigingen</p> : null}
                 {error ? <p className="error-message">{error}</p> : null}
                 <button disabled={!selectedClassId || submitting} onClick={handleSaveTypical} type="button">
                   {submitting
@@ -805,10 +962,11 @@ export default function App() {
 
                         <label className="field definition-wide">
                           <span>Allowed values (komma-gescheiden)</span>
-                          <input
-                            value={definition.allowed_values.join(", ")}
+                            <input
+                            value={definition.allowed_values_text}
                             onChange={(event) =>
                               updateDefinition(definition.feature_key, {
+                                allowed_values_text: event.target.value,
                                 allowed_values: event.target.value
                                   .split(",")
                                   .map((item) => item.trim())
