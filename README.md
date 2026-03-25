@@ -277,6 +277,36 @@ Belangrijke architectuurkeuzes:
 - README bevat de eerste projectrichting
 - basis Docker stack voorzien voor `frontend`, `backend` en `db`
 
+## Next Step
+
+De eerstvolgende implementatiestap is het uitwerken van de
+`TypicalParameterDefinition`-laag als echte governance-laag bovenop ETIM.
+
+Doel van deze stap:
+
+- geselecteerde ETIM-features niet enkel tonen of opslaan
+- maar ze omzetten naar beheerde parameterdefinities
+- zodat de bibliotheek bepaalt welke invoervorm en welke waarden toegelaten zijn
+
+Concreet uit te werken:
+
+- backendmodel voor `TypicalParameterDefinition`
+- koppeling tussen `EquipmentTypical` en zijn parameterdefinities
+- UI om per geselecteerde ETIM-feature te bepalen:
+  - inputtype
+  - toegelaten waarden
+  - defaultwaarde
+  - required ja/nee
+  - parametriseerbaar ja/nee
+- interface-afleiding laten steunen op die definitions in plaats van op ruwe of hardcoded parameters
+
+Waarom deze stap nu:
+
+- create/edit-flow voor typicals werkt al
+- ETIM-featureselectie werkt al
+- zonder governance-laag blijven waardes nog te los en ontstaat risico op vervuiling
+- dit is de eerste stap die de omgeving echt van prototype naar beheerde bibliotheek tilt
+
 ## Lokale Start
 
 Start de ontwikkelomgeving met:
