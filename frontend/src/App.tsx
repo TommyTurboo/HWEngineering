@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 
 type HealthResponse = {
   status: string;
@@ -35,6 +35,21 @@ type EtimClassDetail = EtimClassSummary & {
   features: EtimFeatureDetail[];
 };
 
+type GovernedParameterDefinition = {
+  feature_key: string;
+  code: string;
+  name: string;
+  source: string;
+  input_type: string;
+  unit: string | null;
+  default_value: string;
+  allowed_values: string[];
+  required: boolean;
+  is_parametrizable: boolean;
+  drives_interfaces: boolean;
+  sort_order: number;
+};
+
 type EquipmentTypical = {
   id: string;
   name: string;
@@ -48,6 +63,20 @@ type EquipmentTypical = {
 };
 
 type EquipmentTypicalDetail = EquipmentTypical & {
+  parameter_definitions: {
+    id: string;
+    code: string;
+    name: string;
+    source: string;
+    input_type: string;
+    unit: string | null;
+    default_value: string | null;
+    allowed_values: string[];
+    required: number;
+    is_parametrizable: number;
+    drives_interfaces: number;
+    sort_order: number;
+  }[];
   parameters: {
     id: string;
     code: string;
@@ -121,11 +150,14 @@ function featureCode(feature: EtimFeatureDetail): string {
   return feature.feature_id.toLowerCase();
 }
 
-function defaultFeatureValue(feature: EtimFeatureDetail): string | null {
+function defaultFeatureValue(feature: EtimFeatureDetail): string {
   if (feature.values.length > 0) {
     return feature.values[0].value_description ?? feature.values[0].value_id;
   }
-  return null;
+  if (feature.feature_type === "L") {
+    return "false";
+  }
+  return "";
 }
 
 function recommendedFeatures(
@@ -165,12 +197,58 @@ function recommendedFeatures(
   return detail.features.slice(0, 5).map((feature) => feature.art_class_feature_nr);
 }
 
+function createDefinitionFromFeature(feature: EtimFeatureDetail): GovernedParameterDefinition {
+  const name = feature.feature_description ?? feature.feature_id;
+  const allowedValues = feature.values.map(
+    (value) => value.value_description ?? value.value_id,
+  );
+  return {
+    feature_key: feature.art_class_feature_nr,
+    code: featureCode(feature),
+    name,
+    source: "etim_feature",
+    input_type: featureInputType(feature),
+    unit: feature.unit_description,
+    default_value: defaultFeatureValue(feature),
+    allowed_values: allowedValues,
+    required: false,
+    is_parametrizable: true,
+    drives_interfaces: name.toLowerCase() === "number of poles (total)",
+    sort_order: feature.sort_order ?? 0,
+  };
+}
+
+function normalizeDefinition(
+  definition: EquipmentTypicalDetail["parameter_definitions"][number],
+  classDetail: EtimClassDetail | null,
+): GovernedParameterDefinition {
+  const linkedFeature = classDetail?.features.find(
+    (feature) =>
+      feature.art_class_feature_nr === definition.code.toUpperCase() ||
+      feature.feature_id.toLowerCase() === definition.code.toLowerCase(),
+  );
+
+  return {
+    feature_key: linkedFeature?.art_class_feature_nr ?? definition.code.toUpperCase(),
+    code: definition.code,
+    name: definition.name,
+    source: definition.source,
+    input_type: definition.input_type,
+    unit: definition.unit,
+    default_value: definition.default_value ?? "",
+    allowed_values: definition.allowed_values ?? [],
+    required: definition.required === 1,
+    is_parametrizable: definition.is_parametrizable === 1,
+    drives_interfaces: definition.drives_interfaces === 1,
+    sort_order: definition.sort_order,
+  };
+}
+
 export default function App() {
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [classes, setClasses] = useState<EtimClassSummary[]>([]);
   const [classDetail, setClassDetail] = useState<EtimClassDetail | null>(null);
-  const [selectedFeatureIds, setSelectedFeatureIds] = useState<string[]>([]);
   const [typicals, setTypicals] = useState<EquipmentTypical[]>([]);
   const [selectedTypicalId, setSelectedTypicalId] = useState<string | null>(null);
   const [mode, setMode] = useState<"create" | "edit">("create");
@@ -179,42 +257,15 @@ export default function App() {
   const [typicalName, setTypicalName] = useState("");
   const [typicalCode, setTypicalCode] = useState("");
   const [typicalDescription, setTypicalDescription] = useState("");
+  const [definitions, setDefinitions] = useState<GovernedParameterDefinition[]>([]);
   const [submitting, setSubmitting] = useState(false);
+  const [loadingTypical, setLoadingTypical] = useState(false);
 
   const selectedClass = classes.find((item) => item.id === selectedClassId);
-
-  useEffect(() => {
-    if (mode === "edit") return;
-    if (!selectedClass) return;
-    setTypicalName(selectedClass.description);
-    setTypicalCode(`typ-${slugify(selectedClass.description)}-${selectedClass.id.toLowerCase()}`);
-    setTypicalDescription(`Typical gebaseerd op ${selectedClass.description}`);
-  }, [selectedClassId, classes, mode, selectedClass]);
-
-  useEffect(() => {
-    async function loadClassDetail() {
-      if (!selectedClassId) {
-        setClassDetail(null);
-        setSelectedFeatureIds([]);
-        return;
-      }
-
-      const response = await fetch(`${apiBaseUrl}/api/v1/etim/classes/${selectedClassId}`);
-      if (!response.ok) {
-        setClassDetail(null);
-        setSelectedFeatureIds([]);
-        return;
-      }
-
-      const payload = (await response.json()) as EtimClassDetail;
-      setClassDetail(payload);
-      if (mode === "create") {
-        setSelectedFeatureIds(recommendedFeatures(selectedClass, payload));
-      }
-    }
-
-    void loadClassDetail();
-  }, [selectedClassId, mode, selectedClass]);
+  const selectedFeatureKeys = useMemo(
+    () => definitions.map((definition) => definition.feature_key),
+    [definitions],
+  );
 
   useEffect(() => {
     async function loadInitialData() {
@@ -233,13 +284,10 @@ export default function App() {
           throw new Error("API bootstrap failed");
         }
 
-        const healthPayload = (await healthResponse.json()) as HealthResponse;
+        setHealth((await healthResponse.json()) as HealthResponse);
         const classesPayload = (await classesResponse.json()) as EtimClassSummary[];
-        const typicalsPayload = (await typicalsResponse.json()) as EquipmentTypical[];
-
-        setHealth(healthPayload);
         setClasses(classesPayload);
-        setTypicals(typicalsPayload);
+        setTypicals((await typicalsResponse.json()) as EquipmentTypical[]);
         if (classesPayload.length > 0) {
           setSelectedClassId(classesPayload[0].id);
         }
@@ -250,6 +298,61 @@ export default function App() {
 
     void loadInitialData();
   }, []);
+
+  useEffect(() => {
+    async function loadClassDetail() {
+      if (!selectedClassId) {
+        setClassDetail(null);
+        if (mode === "create") {
+          setDefinitions([]);
+        }
+        return;
+      }
+
+      const response = await fetch(`${apiBaseUrl}/api/v1/etim/classes/${selectedClassId}`);
+      if (!response.ok) {
+        setClassDetail(null);
+        if (mode === "create") {
+          setDefinitions([]);
+        }
+        return;
+      }
+
+      const payload = (await response.json()) as EtimClassDetail;
+      setClassDetail(payload);
+
+      if (mode === "create") {
+        const recommended = new Set(recommendedFeatures(selectedClass, payload));
+        setDefinitions(
+          payload.features
+            .filter((feature) => recommended.has(feature.art_class_feature_nr))
+            .map(createDefinitionFromFeature),
+        );
+      }
+    }
+
+    void loadClassDetail();
+  }, [selectedClassId, mode, selectedClass]);
+
+  useEffect(() => {
+    if (mode === "edit") return;
+    if (!selectedClass) return;
+    setTypicalName(selectedClass.description);
+    setTypicalCode(`typ-${slugify(selectedClass.description)}-${selectedClass.id.toLowerCase()}`);
+    setTypicalDescription(`Typical gebaseerd op ${selectedClass.description}`);
+  }, [selectedClass, mode]);
+
+  async function refreshTypicals(selectedId?: string | null) {
+    const listResponse = await fetch(`${apiBaseUrl}/api/v1/typicals`);
+    if (!listResponse.ok) {
+      throw new Error("Typicals laden mislukt");
+    }
+    const listPayload = (await listResponse.json()) as EquipmentTypical[];
+    setTypicals(listPayload);
+    if (selectedId !== undefined) {
+      setSelectedTypicalId(selectedId);
+    }
+  }
 
   async function handleSearch(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -269,10 +372,6 @@ export default function App() {
   function buildPayload() {
     if (!selectedClass) return null;
 
-    const selectedFeatures = (classDetail?.features ?? []).filter((feature) =>
-      selectedFeatureIds.includes(feature.art_class_feature_nr),
-    );
-
     return {
       name: typicalName.trim() || selectedClass.description,
       code:
@@ -282,19 +381,20 @@ export default function App() {
         typicalDescription.trim() || `Typical gebaseerd op ${selectedClass.description}`,
       etim_class_id: selectedClass.id,
       template_key: inferTemplate(selectedClass),
-      parameters: selectedFeatures.map((feature) => ({
-        code: featureCode(feature),
-        name: feature.feature_description ?? feature.feature_id,
-        source: "etim_feature",
-        data_type: featureInputType(feature),
-        unit: feature.unit_description,
-        value: defaultFeatureValue(feature),
-        required: false,
-        is_parametrizable: true,
-        drives_interfaces:
-          (feature.feature_description ?? "").toLowerCase() === "number of poles (total)",
-        sort_order: feature.sort_order ?? 0,
+      parameter_definitions: definitions.map((definition) => ({
+        code: definition.code,
+        name: definition.name,
+        source: definition.source,
+        input_type: definition.input_type,
+        unit: definition.unit,
+        default_value: definition.default_value || null,
+        allowed_values: definition.allowed_values,
+        required: definition.required,
+        is_parametrizable: definition.is_parametrizable,
+        drives_interfaces: definition.drives_interfaces,
+        sort_order: definition.sort_order,
       })),
+      parameters: [],
     };
   }
 
@@ -312,9 +412,7 @@ export default function App() {
         isEdit ? `${apiBaseUrl}/api/v1/typicals/${selectedTypicalId}` : `${apiBaseUrl}/api/v1/typicals`,
         {
           method: isEdit ? "PUT" : "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
         },
       );
@@ -327,18 +425,15 @@ export default function App() {
             detail = errorPayload.detail;
           }
         } catch {
-          detail = isEdit ? "Update typical failed" : "Create typical failed";
+          undefined;
         }
         throw new Error(detail);
       }
 
       const saved = (await response.json()) as EquipmentTypicalDetail;
-      const listResponse = await fetch(`${apiBaseUrl}/api/v1/typicals`);
-      const listPayload = (await listResponse.json()) as EquipmentTypical[];
-      setTypicals(listPayload);
-      setSelectedTypicalId(saved.id);
-      setSelectedClassId(saved.etim_class_id);
+      await refreshTypicals(saved.id);
       setMode("edit");
+      await handleEditTypical(saved.id);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unknown error");
     } finally {
@@ -346,46 +441,99 @@ export default function App() {
     }
   }
 
-  function toggleFeature(featureId: string) {
-    setSelectedFeatureIds((current) =>
-      current.includes(featureId)
-        ? current.filter((item) => item !== featureId)
-        : [...current, featureId],
+  function toggleFeature(feature: EtimFeatureDetail) {
+    setDefinitions((current) => {
+      const exists = current.some((item) => item.feature_key === feature.art_class_feature_nr);
+      if (exists) {
+        return current.filter((item) => item.feature_key !== feature.art_class_feature_nr);
+      }
+      return [...current, createDefinitionFromFeature(feature)].sort(
+        (left, right) => left.sort_order - right.sort_order,
+      );
+    });
+  }
+
+  function updateDefinition(
+    featureKey: string,
+    patch: Partial<GovernedParameterDefinition>,
+  ) {
+    setDefinitions((current) =>
+      current.map((definition) =>
+        definition.feature_key === featureKey ? { ...definition, ...patch } : definition,
+      ),
     );
   }
 
   async function handleEditTypical(typicalId: string) {
     setError(null);
-    const response = await fetch(`${apiBaseUrl}/api/v1/typicals/${typicalId}`);
-    if (!response.ok) {
-      setError("Typical laden mislukt");
-      return;
-    }
+    setLoadingTypical(true);
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/v1/typicals/${typicalId}`);
+      if (!response.ok) {
+        throw new Error("Typical laden mislukt");
+      }
 
-    const payload = (await response.json()) as EquipmentTypicalDetail;
-    setSelectedTypicalId(payload.id);
-    setMode("edit");
-    setSelectedClassId(payload.etim_class_id);
-    setTypicalName(payload.name);
-    setTypicalCode(payload.code);
-    setTypicalDescription(payload.description ?? "");
-    setSelectedFeatureIds(payload.parameters.map((parameter) => parameter.code.toUpperCase()));
+      const payload = (await response.json()) as EquipmentTypicalDetail;
+      setSelectedTypicalId(payload.id);
+      setMode("edit");
+      setSelectedClassId(payload.etim_class_id);
+      setTypicalName(payload.name);
+      setTypicalCode(payload.code);
+      setTypicalDescription(payload.description ?? "");
+
+      const classResponse = await fetch(`${apiBaseUrl}/api/v1/etim/classes/${payload.etim_class_id}`);
+      const detail = classResponse.ok
+        ? ((await classResponse.json()) as EtimClassDetail)
+        : null;
+      setClassDetail(detail);
+
+      const nextDefinitions =
+        payload.parameter_definitions.length > 0
+          ? payload.parameter_definitions.map((definition) =>
+              normalizeDefinition(definition, detail),
+            )
+          : payload.parameters.map((parameter) => ({
+              feature_key: parameter.code.toUpperCase(),
+              code: parameter.code,
+              name: parameter.name,
+              source: parameter.source,
+              input_type: parameter.data_type,
+              unit: parameter.unit,
+              default_value: parameter.value ?? "",
+              allowed_values: [],
+              required: parameter.required === 1,
+              is_parametrizable: parameter.is_parametrizable === 1,
+              drives_interfaces: parameter.drives_interfaces === 1,
+              sort_order: parameter.sort_order,
+            }));
+
+      setDefinitions(nextDefinitions.sort((left, right) => left.sort_order - right.sort_order));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unknown error");
+    } finally {
+      setLoadingTypical(false);
+    }
   }
 
   function handleNewTypical() {
     setMode("create");
     setSelectedTypicalId(null);
     setError(null);
-    if (selectedClass) {
+    if (selectedClass && classDetail) {
       setTypicalName(selectedClass.description);
       setTypicalCode(`typ-${slugify(selectedClass.description)}-${selectedClass.id.toLowerCase()}`);
       setTypicalDescription(`Typical gebaseerd op ${selectedClass.description}`);
-      setSelectedFeatureIds(recommendedFeatures(selectedClass, classDetail));
+      const recommended = new Set(recommendedFeatures(selectedClass, classDetail));
+      setDefinitions(
+        classDetail.features
+          .filter((feature) => recommended.has(feature.art_class_feature_nr))
+          .map(createDefinitionFromFeature),
+      );
     } else {
       setTypicalName("");
       setTypicalCode("");
       setTypicalDescription("");
-      setSelectedFeatureIds([]);
+      setDefinitions([]);
     }
   }
 
@@ -434,7 +582,7 @@ export default function App() {
         </div>
 
         <section className="roadmap-card">
-          <h2>Eerste ETIM verticale slice</h2>
+          <h2>Governed parameter definitions</h2>
           <form className="search-row" onSubmit={handleSearch}>
             <input
               value={search}
@@ -498,6 +646,9 @@ export default function App() {
                 <p className="helper-text">
                   Template: {inferTemplate(selectedClass) ?? "geen automatische template"}
                 </p>
+                <p className="helper-text">
+                  Geselecteerde parameterdefinities: {definitions.length}
+                </p>
                 {error ? <p className="error-message">{error}</p> : null}
                 <button disabled={!selectedClassId || submitting} onClick={handleSaveTypical} type="button">
                   {submitting
@@ -518,17 +669,13 @@ export default function App() {
                   <p className="empty-state">Geen klasse geselecteerd.</p>
                 ) : (
                   classDetail.features.map((feature) => {
-                    const featureSelectionKey = feature.art_class_feature_nr;
-                    const featureSelectionCode = feature.feature_id.toUpperCase();
-                    const checked =
-                      selectedFeatureIds.includes(featureSelectionKey) ||
-                      selectedFeatureIds.includes(featureSelectionCode);
+                    const checked = selectedFeatureKeys.includes(feature.art_class_feature_nr);
 
                     return (
                       <label className="feature-item" key={feature.art_class_feature_nr}>
                         <input
                           checked={checked}
-                          onChange={() => toggleFeature(featureSelectionKey)}
+                          onChange={() => toggleFeature(feature)}
                           type="checkbox"
                         />
                         <span>
@@ -587,9 +734,139 @@ export default function App() {
             </div>
           </div>
 
+          <div className="governance-panel">
+            <div className="editor-header">
+              <h3>Parameter governance</h3>
+              {loadingTypical ? <small className="empty-state">Typical laden...</small> : null}
+            </div>
+            {definitions.length === 0 ? (
+              <p className="empty-state">Selecteer eerst ETIM-features om parameterdefinities op te bouwen.</p>
+            ) : (
+              <div className="definition-list">
+                {definitions
+                  .slice()
+                  .sort((left, right) => left.sort_order - right.sort_order)
+                  .map((definition) => (
+                    <article className="definition-card" key={definition.feature_key}>
+                      <div className="definition-head">
+                        <strong>{definition.name}</strong>
+                        <small>{definition.code}</small>
+                      </div>
+
+                      <div className="definition-grid">
+                        <label className="field">
+                          <span>Inputtype</span>
+                          <select
+                            value={definition.input_type}
+                            onChange={(event) =>
+                              updateDefinition(definition.feature_key, {
+                                input_type: event.target.value,
+                              })
+                            }
+                          >
+                            <option value="enum">enum</option>
+                            <option value="boolean">boolean</option>
+                            <option value="managed_numeric">managed_numeric</option>
+                            <option value="range">range</option>
+                            <option value="managed_value">managed_value</option>
+                          </select>
+                        </label>
+
+                        <label className="field">
+                          <span>Default</span>
+                          {definition.allowed_values.length > 0 ? (
+                            <select
+                              value={definition.default_value}
+                              onChange={(event) =>
+                                updateDefinition(definition.feature_key, {
+                                  default_value: event.target.value,
+                                })
+                              }
+                            >
+                              <option value="">Geen default</option>
+                              {definition.allowed_values.map((value) => (
+                                <option key={value} value={value}>
+                                  {value}
+                                </option>
+                              ))}
+                            </select>
+                          ) : (
+                            <input
+                              value={definition.default_value}
+                              onChange={(event) =>
+                                updateDefinition(definition.feature_key, {
+                                  default_value: event.target.value,
+                                })
+                              }
+                              placeholder="Defaultwaarde"
+                            />
+                          )}
+                        </label>
+
+                        <label className="field definition-wide">
+                          <span>Allowed values (komma-gescheiden)</span>
+                          <input
+                            value={definition.allowed_values.join(", ")}
+                            onChange={(event) =>
+                              updateDefinition(definition.feature_key, {
+                                allowed_values: event.target.value
+                                  .split(",")
+                                  .map((item) => item.trim())
+                                  .filter(Boolean),
+                              })
+                            }
+                            placeholder="Bijv. B, C, D of 1, 2, 3, 4"
+                          />
+                        </label>
+                      </div>
+
+                      <div className="toggle-row">
+                        <label className="checkbox-field">
+                          <input
+                            checked={definition.required}
+                            onChange={(event) =>
+                              updateDefinition(definition.feature_key, {
+                                required: event.target.checked,
+                              })
+                            }
+                            type="checkbox"
+                          />
+                          <span>Required</span>
+                        </label>
+                        <label className="checkbox-field">
+                          <input
+                            checked={definition.is_parametrizable}
+                            onChange={(event) =>
+                              updateDefinition(definition.feature_key, {
+                                is_parametrizable: event.target.checked,
+                              })
+                            }
+                            type="checkbox"
+                          />
+                          <span>Parametriseerbaar</span>
+                        </label>
+                        <label className="checkbox-field">
+                          <input
+                            checked={definition.drives_interfaces}
+                            onChange={(event) =>
+                              updateDefinition(definition.feature_key, {
+                                drives_interfaces: event.target.checked,
+                              })
+                            }
+                            type="checkbox"
+                          />
+                          <span>Stuurt interfaces</span>
+                        </label>
+                      </div>
+                    </article>
+                  ))}
+              </div>
+            )}
+          </div>
+
           <ul>
             <li>Equipment Typical bibliotheek</li>
-            <li>ETIM feature mapping</li>
+            <li>Governed parameter definitions bovenop ETIM</li>
             <li>Parametergestuurde interface-afleiding</li>
             <li>Draft en released versies</li>
           </ul>

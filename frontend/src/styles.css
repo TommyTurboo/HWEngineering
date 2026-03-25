@@ -164,6 +164,14 @@ h1 {
   font: inherit;
 }
 
+.field select {
+  border: 1px solid rgba(23, 32, 42, 0.16);
+  border-radius: 10px;
+  padding: 10px 12px;
+  font: inherit;
+  background: white;
+}
+
 .helper-text {
   margin: 0 0 12px;
   color: #536471;
@@ -266,4 +274,54 @@ h1 {
 .typical-card small,
 .empty-state {
   color: #536471;
+}
+
+.governance-panel {
+  margin-bottom: 20px;
+  padding: 16px;
+  border: 1px solid rgba(23, 32, 42, 0.08);
+  border-radius: 16px;
+  background: #ffffff;
+}
+
+.definition-list {
+  display: grid;
+  gap: 14px;
+}
+
+.definition-card {
+  padding: 14px;
+  border: 1px solid rgba(23, 32, 42, 0.08);
+  border-radius: 14px;
+  background: #fbfcfc;
+}
+
+.definition-head {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+
+.definition-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.definition-wide {
+  grid-column: 1 / -1;
+}
+
+.toggle-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-top: 8px;
+}
+
+.checkbox-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #17202a;
 }

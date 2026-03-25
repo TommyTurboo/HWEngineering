@@ -1,6 +1,7 @@
 from datetime import datetime
+import json
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class EtimClassSummary(BaseModel):
@@ -46,6 +47,20 @@ class TypicalParameterCreate(BaseModel):
     sort_order: int = 0
 
 
+class TypicalParameterDefinitionCreate(BaseModel):
+    code: str
+    name: str
+    source: str
+    input_type: str
+    unit: str | None = None
+    default_value: str | None = None
+    allowed_values: list[str] = Field(default_factory=list)
+    required: bool = False
+    is_parametrizable: bool = True
+    drives_interfaces: bool = False
+    sort_order: int = 0
+
+
 class TypicalInterfaceRead(BaseModel):
     id: str
     code: str
@@ -76,12 +91,47 @@ class TypicalParameterRead(BaseModel):
         from_attributes = True
 
 
+class TypicalParameterDefinitionRead(BaseModel):
+    id: str
+    code: str
+    name: str
+    source: str
+    input_type: str
+    unit: str | None = None
+    default_value: str | None = None
+    allowed_values: list[str] = Field(default_factory=list)
+    required: int
+    is_parametrizable: int
+    drives_interfaces: int
+    sort_order: int
+
+    class Config:
+        from_attributes = True
+
+    @field_validator("allowed_values", mode="before")
+    @classmethod
+    def parse_allowed_values(cls, value: object) -> list[str]:
+        if value is None or value == "":
+            return []
+        if isinstance(value, list):
+            return [str(item) for item in value]
+        if isinstance(value, str):
+            try:
+                parsed = json.loads(value)
+            except json.JSONDecodeError:
+                return [item.strip() for item in value.split(",") if item.strip()]
+            if isinstance(parsed, list):
+                return [str(item) for item in parsed]
+        return []
+
+
 class EquipmentTypicalCreate(BaseModel):
     name: str
     code: str
     description: str | None = None
     etim_class_id: str
     template_key: str | None = None
+    parameter_definitions: list[TypicalParameterDefinitionCreate] = Field(default_factory=list)
     parameters: list[TypicalParameterCreate] = Field(default_factory=list)
 
 
@@ -101,6 +151,7 @@ class EquipmentTypicalRead(BaseModel):
     version: int
     created_at: datetime
     updated_at: datetime
+    parameter_definitions: list[TypicalParameterDefinitionRead]
     parameters: list[TypicalParameterRead]
     interfaces: list[TypicalInterfaceRead]
 

@@ -27,9 +27,34 @@ class EquipmentTypical(Base):
     parameters: Mapped[list["TypicalParameter"]] = relationship(
         back_populates="typical", cascade="all, delete-orphan"
     )
+    parameter_definitions: Mapped[list["TypicalParameterDefinition"]] = relationship(
+        back_populates="typical", cascade="all, delete-orphan"
+    )
     interfaces: Mapped[list["TypicalInterface"]] = relationship(
         back_populates="typical", cascade="all, delete-orphan"
     )
+
+
+class TypicalParameterDefinition(Base):
+    __tablename__ = "typical_parameter_definitions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    typical_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("equipment_typicals.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    code: Mapped[str] = mapped_column(String(100), nullable=False)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    source: Mapped[str] = mapped_column(String(30), nullable=False)
+    input_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    unit: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    default_value: Mapped[str | None] = mapped_column(Text, nullable=True)
+    allowed_values: Mapped[str | None] = mapped_column(Text, nullable=True)
+    required: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    is_parametrizable: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    drives_interfaces: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+    typical: Mapped[EquipmentTypical] = relationship(back_populates="parameter_definitions")
 
 
 class TypicalParameter(Base):
@@ -68,4 +93,3 @@ class TypicalInterface(Base):
     sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
     typical: Mapped[EquipmentTypical] = relationship(back_populates="interfaces")
-

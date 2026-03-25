@@ -1,26 +1,30 @@
+import json
+
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from app.etim_repository import get_class_detail
-from app.models import EquipmentTypical, TypicalInterface, TypicalParameter
+from app.models import EquipmentTypical, TypicalInterface, TypicalParameter, TypicalParameterDefinition
 from app.schemas import EquipmentTypicalCreate, EquipmentTypicalUpdate
 
 
 def derive_interfaces(payload: EquipmentTypicalCreate) -> list[TypicalInterface]:
     pole_count = 1
-    for parameter in payload.parameters:
+    source_parameters = payload.parameter_definitions or payload.parameters
+    for parameter in source_parameters:
         parameter_code = parameter.code.lower()
         parameter_name = parameter.name.lower()
+        parameter_value = getattr(parameter, "default_value", None) or getattr(parameter, "value", None)
         if (
-            parameter.value
+            parameter_value
             and (
                 parameter_code in {"number_of_poles", "poles", "pole_count", "ef008618"}
                 or "number of poles" in parameter_name
             )
         ):
             try:
-                pole_count = max(1, int(parameter.value))
+                pole_count = max(1, int(parameter_value))
             except ValueError:
                 pole_count = 1
 
@@ -90,6 +94,94 @@ def derive_interfaces(payload: EquipmentTypicalCreate) -> list[TypicalInterface]
     return interfaces
 
 
+def _build_parameter_definitions(payload: EquipmentTypicalCreate) -> list[TypicalParameterDefinition]:
+    definitions = payload.parameter_definitions
+    if not definitions and payload.parameters:
+        return [
+            TypicalParameterDefinition(
+                code=parameter.code,
+                name=parameter.name,
+                source=parameter.source,
+                input_type=parameter.data_type,
+                unit=parameter.unit,
+                default_value=parameter.value,
+                allowed_values=None,
+                required=1 if parameter.required else 0,
+                is_parametrizable=1 if parameter.is_parametrizable else 0,
+                drives_interfaces=1 if parameter.drives_interfaces else 0,
+                sort_order=parameter.sort_order,
+            )
+            for parameter in payload.parameters
+        ]
+
+    return [
+        TypicalParameterDefinition(
+            code=definition.code,
+            name=definition.name,
+            source=definition.source,
+            input_type=definition.input_type,
+            unit=definition.unit,
+            default_value=definition.default_value,
+            allowed_values=json.dumps(definition.allowed_values),
+            required=1 if definition.required else 0,
+            is_parametrizable=1 if definition.is_parametrizable else 0,
+            drives_interfaces=1 if definition.drives_interfaces else 0,
+            sort_order=definition.sort_order,
+        )
+        for definition in definitions
+    ]
+
+
+def _build_parameters(payload: EquipmentTypicalCreate) -> list[TypicalParameter]:
+    if payload.parameter_definitions:
+        return [
+            TypicalParameter(
+                code=definition.code,
+                name=definition.name,
+                source=definition.source,
+                data_type=definition.input_type,
+                unit=definition.unit,
+                value=definition.default_value,
+                required=1 if definition.required else 0,
+                is_parametrizable=1 if definition.is_parametrizable else 0,
+                drives_interfaces=1 if definition.drives_interfaces else 0,
+                sort_order=definition.sort_order,
+            )
+            for definition in payload.parameter_definitions
+        ]
+
+    return [
+        TypicalParameter(
+            code=parameter.code,
+            name=parameter.name,
+            source=parameter.source,
+            data_type=parameter.data_type,
+            unit=parameter.unit,
+            value=parameter.value,
+            required=1 if parameter.required else 0,
+            is_parametrizable=1 if parameter.is_parametrizable else 0,
+            drives_interfaces=1 if parameter.drives_interfaces else 0,
+            sort_order=parameter.sort_order,
+        )
+        for parameter in payload.parameters
+    ]
+
+
+def _normalize_allowed_values(typical: EquipmentTypical) -> EquipmentTypical:
+    for definition in typical.parameter_definitions:
+        raw_value = definition.allowed_values
+        if raw_value:
+            try:
+                definition.allowed_values = json.dumps(json.loads(raw_value))
+            except json.JSONDecodeError:
+                definition.allowed_values = json.dumps(
+                    [item.strip() for item in raw_value.split(",") if item.strip()]
+                )
+        else:
+            definition.allowed_values = json.dumps([])
+    return typical
+
+
 def create_typical(db: Session, payload: EquipmentTypicalCreate) -> EquipmentTypical:
     etim_class = get_class_detail(payload.etim_class_id)
     if etim_class is None:
@@ -106,21 +198,8 @@ def create_typical(db: Session, payload: EquipmentTypicalCreate) -> EquipmentTyp
         version=1,
     )
 
-    typical.parameters = [
-        TypicalParameter(
-            code=parameter.code,
-            name=parameter.name,
-            source=parameter.source,
-            data_type=parameter.data_type,
-            unit=parameter.unit,
-            value=parameter.value,
-            required=1 if parameter.required else 0,
-            is_parametrizable=1 if parameter.is_parametrizable else 0,
-            drives_interfaces=1 if parameter.drives_interfaces else 0,
-            sort_order=parameter.sort_order,
-        )
-        for parameter in payload.parameters
-    ]
+    typical.parameter_definitions = _build_parameter_definitions(payload)
+    typical.parameters = _build_parameters(payload)
     typical.interfaces = derive_interfaces(payload)
 
     db.add(typical)
@@ -133,7 +212,10 @@ def create_typical(db: Session, payload: EquipmentTypicalCreate) -> EquipmentTyp
         ) from exc
 
     db.refresh(typical)
-    return get_typical(db, typical.id)
+    result = get_typical(db, typical.id)
+    if result is None:
+        raise ValueError("Typical kon niet opnieuw geladen worden.")
+    return _normalize_allowed_values(result)
 
 
 def update_typical(db: Session, typical_id: str, payload: EquipmentTypicalUpdate) -> EquipmentTypical | None:
@@ -152,24 +234,11 @@ def update_typical(db: Session, typical_id: str, payload: EquipmentTypicalUpdate
     typical.etim_class_description = etim_class.description
     typical.template_key = payload.template_key
 
+    typical.parameter_definitions.clear()
+    typical.parameter_definitions.extend(_build_parameter_definitions(payload))
+
     typical.parameters.clear()
-    typical.parameters.extend(
-        [
-            TypicalParameter(
-                code=parameter.code,
-                name=parameter.name,
-                source=parameter.source,
-                data_type=parameter.data_type,
-                unit=parameter.unit,
-                value=parameter.value,
-                required=1 if parameter.required else 0,
-                is_parametrizable=1 if parameter.is_parametrizable else 0,
-                drives_interfaces=1 if parameter.drives_interfaces else 0,
-                sort_order=parameter.sort_order,
-            )
-            for parameter in payload.parameters
-        ]
-    )
+    typical.parameters.extend(_build_parameters(payload))
 
     typical.interfaces.clear()
     typical.interfaces.extend(derive_interfaces(payload))
@@ -183,25 +252,35 @@ def update_typical(db: Session, typical_id: str, payload: EquipmentTypicalUpdate
         ) from exc
 
     db.refresh(typical)
-    return get_typical(db, typical.id)
+    result = get_typical(db, typical.id)
+    return _normalize_allowed_values(result) if result is not None else None
 
 
 def list_typicals(db: Session) -> list[EquipmentTypical]:
     stmt = (
         select(EquipmentTypical)
-        .options(selectinload(EquipmentTypical.parameters), selectinload(EquipmentTypical.interfaces))
+        .options(
+            selectinload(EquipmentTypical.parameter_definitions),
+            selectinload(EquipmentTypical.parameters),
+            selectinload(EquipmentTypical.interfaces),
+        )
         .order_by(EquipmentTypical.updated_at.desc())
     )
-    return list(db.scalars(stmt))
+    return [_normalize_allowed_values(item) for item in db.scalars(stmt)]
 
 
 def get_typical(db: Session, typical_id: str) -> EquipmentTypical | None:
     stmt = (
         select(EquipmentTypical)
         .where(EquipmentTypical.id == typical_id)
-        .options(selectinload(EquipmentTypical.parameters), selectinload(EquipmentTypical.interfaces))
+        .options(
+            selectinload(EquipmentTypical.parameter_definitions),
+            selectinload(EquipmentTypical.parameters),
+            selectinload(EquipmentTypical.interfaces),
+        )
     )
-    return db.scalars(stmt).first()
+    result = db.scalars(stmt).first()
+    return _normalize_allowed_values(result) if result is not None else None
 
 
 def delete_typical(db: Session, typical_id: str) -> bool:
