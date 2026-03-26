@@ -300,6 +300,14 @@ h1 {
   background: #ffffff;
 }
 
+.interfaces-panel {
+  margin-bottom: 20px;
+  padding: 16px;
+  border: 1px solid rgba(23, 32, 42, 0.08);
+  border-radius: 16px;
+  background: #ffffff;
+}
+
 .validation-panel {
   margin-bottom: 20px;
   padding: 16px;
@@ -344,7 +352,32 @@ h1 {
   gap: 14px;
 }
 
+.interface-list {
+  display: grid;
+  gap: 14px;
+}
+
+.group-list {
+  display: grid;
+  gap: 14px;
+  margin-bottom: 14px;
+}
+
 .definition-card {
+  padding: 14px;
+  border: 1px solid rgba(23, 32, 42, 0.08);
+  border-radius: 14px;
+  background: #fbfcfc;
+}
+
+.group-card {
+  padding: 14px;
+  border: 1px solid rgba(23, 32, 42, 0.08);
+  border-radius: 14px;
+  background: #fbfcfc;
+}
+
+.interface-card {
   padding: 14px;
   border: 1px solid rgba(23, 32, 42, 0.08);
   border-radius: 14px;

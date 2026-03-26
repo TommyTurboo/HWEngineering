@@ -30,6 +30,9 @@ class EquipmentTypical(Base):
     parameter_definitions: Mapped[list["TypicalParameterDefinition"]] = relationship(
         back_populates="typical", cascade="all, delete-orphan"
     )
+    interface_groups: Mapped[list["TypicalInterfaceGroup"]] = relationship(
+        back_populates="typical", cascade="all, delete-orphan"
+    )
     interfaces: Mapped[list["TypicalInterface"]] = relationship(
         back_populates="typical", cascade="all, delete-orphan"
     )
@@ -108,6 +111,7 @@ class TypicalInterface(Base):
     typical_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("equipment_typicals.id", ondelete="CASCADE"), nullable=False, index=True
     )
+    group_code: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
     code: Mapped[str] = mapped_column(String(100), nullable=False)
     role: Mapped[str] = mapped_column(String(100), nullable=False)
     logical_type: Mapped[str] = mapped_column(String(50), nullable=False)
@@ -116,3 +120,20 @@ class TypicalInterface(Base):
     sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
     typical: Mapped[EquipmentTypical] = relationship(back_populates="interfaces")
+
+
+class TypicalInterfaceGroup(Base):
+    __tablename__ = "typical_interface_groups"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    typical_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("equipment_typicals.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    code: Mapped[str] = mapped_column(String(100), nullable=False)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    category: Mapped[str] = mapped_column(String(100), nullable=False)
+    side: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    source: Mapped[str] = mapped_column(String(30), default="profile", nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+    typical: Mapped[EquipmentTypical] = relationship(back_populates="interface_groups")

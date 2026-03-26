@@ -61,8 +61,41 @@ class TypicalParameterDefinitionCreate(BaseModel):
     sort_order: int = 0
 
 
+class TypicalInterfaceCreate(BaseModel):
+    group_code: str | None = None
+    code: str
+    role: str
+    logical_type: str
+    direction: str
+    source: str = "derived"
+    sort_order: int = 0
+
+
+class TypicalInterfaceGroupCreate(BaseModel):
+    code: str
+    name: str
+    category: str
+    side: str | None = None
+    source: str = "profile"
+    sort_order: int = 0
+
+
+class TypicalInterfaceGroupRead(BaseModel):
+    id: str
+    code: str
+    name: str
+    category: str
+    side: str | None = None
+    source: str
+    sort_order: int
+
+    class Config:
+        from_attributes = True
+
+
 class TypicalInterfaceRead(BaseModel):
     id: str
+    group_code: str | None = None
     code: str
     role: str
     logical_type: str
@@ -204,6 +237,9 @@ class EquipmentTypicalCreate(BaseModel):
     template_key: str | None = None
     parameter_definitions: list[TypicalParameterDefinitionCreate] = Field(default_factory=list)
     parameters: list[TypicalParameterCreate] = Field(default_factory=list)
+    interface_groups: list[TypicalInterfaceGroupCreate] = Field(default_factory=list)
+    interfaces: list[TypicalInterfaceCreate] = Field(default_factory=list)
+    disabled_interface_codes: list[str] = Field(default_factory=list)
 
 
 class EquipmentTypicalUpdate(EquipmentTypicalCreate):
@@ -224,6 +260,7 @@ class EquipmentTypicalRead(BaseModel):
     updated_at: datetime
     parameter_definitions: list[TypicalParameterDefinitionRead]
     parameters: list[TypicalParameterRead]
+    interface_groups: list[TypicalInterfaceGroupRead]
     interfaces: list[TypicalInterfaceRead]
 
     class Config:

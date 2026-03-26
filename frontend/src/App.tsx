@@ -51,6 +51,27 @@ type GovernedParameterDefinition = {
   sort_order: number;
 };
 
+type EditableInterface = {
+  local_key: string;
+  group_code: string | null;
+  code: string;
+  role: string;
+  logical_type: string;
+  direction: string;
+  source: "derived" | "override";
+  sort_order: number;
+};
+
+type EditableInterfaceGroup = {
+  local_key: string;
+  code: string;
+  name: string;
+  category: string;
+  side: string;
+  source: "profile" | "custom";
+  sort_order: number;
+};
+
 type EquipmentTypical = {
   id: string;
   name: string;
@@ -93,10 +114,20 @@ type EquipmentTypicalDetail = EquipmentTypical & {
   }[];
   interfaces: {
     id: string;
+    group_code: string | null;
     code: string;
     role: string;
     logical_type: string;
     direction: string;
+    source: string;
+    sort_order: number;
+  }[];
+  interface_groups: {
+    id: string;
+    code: string;
+    name: string;
+    category: string;
+    side: string | null;
     source: string;
     sort_order: number;
   }[];
@@ -133,6 +164,7 @@ type TypicalValidationResult = {
 };
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
+const SWITCH_TOPOLOGIES = ["L", "L+N", "3L", "3L+N"] as const;
 
 function slugify(value: string): string {
   return value
@@ -245,8 +277,265 @@ function createDefinitionFromFeature(feature: EtimFeatureDetail): GovernedParame
     allowed_values_text: allowedValues.join(", "),
     required: false,
     is_parametrizable: true,
-    drives_interfaces: name.toLowerCase() === "number of poles (total)",
+    drives_interfaces: false,
     sort_order: feature.sort_order ?? 0,
+  };
+}
+
+function normalizeInterfaceCode(code: string): string {
+  return code.trim().toUpperCase();
+}
+
+function defaultInterfaceGroups(templateKey: string | null): EditableInterfaceGroup[] {
+  if (templateKey === "multi_pole_switch_device") {
+    return [
+      {
+        local_key: "group-input-power",
+        code: "input_power",
+        name: "Input power",
+        category: "power_input",
+        side: "line",
+        source: "profile",
+        sort_order: 0,
+      },
+      {
+        local_key: "group-output-power",
+        code: "output_power",
+        name: "Output power",
+        category: "power_output",
+        side: "load",
+        source: "profile",
+        sort_order: 1,
+      },
+    ];
+  }
+
+  if (templateKey === "dc_power_supply") {
+    return [
+      {
+        local_key: "group-input-power",
+        code: "input_power",
+        name: "Input power",
+        category: "power_input",
+        side: "primary",
+        source: "profile",
+        sort_order: 0,
+      },
+      {
+        local_key: "group-output-power",
+        code: "output_power",
+        name: "Output power",
+        category: "power_output",
+        side: "secondary",
+        source: "profile",
+        sort_order: 1,
+      },
+    ];
+  }
+
+  return [];
+}
+
+function createLocalKey(): string {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+}
+
+function inferSwitchTopologyFromDefinitions(definitions: GovernedParameterDefinition[]): string {
+  const topologyDefinition = definitions.find((definition) => definition.code.toLowerCase() === "power_topology");
+  if (topologyDefinition && SWITCH_TOPOLOGIES.includes(topologyDefinition.default_value as (typeof SWITCH_TOPOLOGIES)[number])) {
+    return topologyDefinition.default_value;
+  }
+
+  const poleDefinition = definitions.find((definition) => {
+    const code = definition.code.toLowerCase();
+    const name = definition.name.toLowerCase();
+    return code === "ef008618" || code === "number_of_poles" || name.includes("number of poles");
+  });
+
+  switch (poleDefinition?.default_value) {
+    case "2":
+      return "L+N";
+    case "3":
+      return "3L";
+    case "4":
+      return "3L+N";
+    default:
+      return "L";
+  }
+}
+
+function ensureTemplateDefinitions(
+  templateKey: string | null,
+  definitions: GovernedParameterDefinition[],
+): GovernedParameterDefinition[] {
+  if (templateKey !== "multi_pole_switch_device") {
+    return definitions;
+  }
+
+  const hasTopology = definitions.some((definition) => definition.code.toLowerCase() === "power_topology");
+  if (hasTopology) {
+    return definitions.map((definition) =>
+      definition.code.toLowerCase() === "power_topology"
+        ? {
+            ...definition,
+            input_type: "enum",
+            allowed_values: [...SWITCH_TOPOLOGIES],
+            allowed_values_text: SWITCH_TOPOLOGIES.join(", "),
+            required: true,
+            drives_interfaces: true,
+            default_value:
+              definition.default_value && SWITCH_TOPOLOGIES.includes(definition.default_value as (typeof SWITCH_TOPOLOGIES)[number])
+                ? definition.default_value
+                : inferSwitchTopologyFromDefinitions(definitions),
+            sort_order: -10,
+          }
+        : {
+            ...definition,
+            drives_interfaces:
+              definition.code.toLowerCase() === "ef008618" || definition.name.toLowerCase().includes("number of poles")
+                ? false
+                : definition.drives_interfaces,
+          },
+    );
+  }
+
+  return [
+    {
+      feature_key: "local:power_topology",
+      code: "power_topology",
+      name: "Power topology",
+      source: "typical_local",
+      input_type: "enum",
+      unit: null,
+      default_value: inferSwitchTopologyFromDefinitions(definitions),
+      allowed_values: [...SWITCH_TOPOLOGIES],
+      allowed_values_text: SWITCH_TOPOLOGIES.join(", "),
+      required: true,
+      is_parametrizable: true,
+      drives_interfaces: true,
+      sort_order: -10,
+    },
+    ...definitions,
+  ].sort((left, right) => left.sort_order - right.sort_order);
+}
+
+function deriveInterfacesFromDefinitions(
+  templateKey: string | null,
+  definitions: GovernedParameterDefinition[],
+  groups: EditableInterfaceGroup[],
+): EditableInterface[] {
+  const interfaces: EditableInterface[] = [];
+  if (templateKey === "multi_pole_switch_device") {
+    const topology = inferSwitchTopologyFromDefinitions(definitions);
+    const labels =
+      topology === "L"
+        ? ["L"]
+        : topology === "L+N"
+          ? ["L", "N"]
+          : topology === "3L"
+            ? ["L1", "L2", "L3"]
+            : ["L1", "L2", "L3", "N"];
+    for (let index = 0; index < labels.length; index += 1) {
+      const label = labels[index];
+      interfaces.push({
+        local_key: `derived-${label}-in`,
+        group_code: groups.find((group) => group.code === "input_power")?.code ?? null,
+        code: `${label}_IN`,
+        role: "line_in",
+        logical_type: "power",
+        direction: "in",
+        source: "derived",
+        sort_order: index * 2,
+      });
+      interfaces.push({
+        local_key: `derived-${label}-out`,
+        group_code: groups.find((group) => group.code === "output_power")?.code ?? null,
+        code: `${label}_OUT`,
+        role: "load_out",
+        logical_type: "power",
+        direction: "out",
+        source: "derived",
+        sort_order: index * 2 + 1,
+      });
+    }
+  } else if (templateKey === "dc_power_supply") {
+    interfaces.push(
+      {
+        local_key: "derived-ac-in",
+        group_code: groups.find((group) => group.code === "input_power")?.code ?? null,
+        code: "AC_IN",
+        role: "power_input",
+        logical_type: "power",
+        direction: "in",
+        source: "derived",
+        sort_order: 0,
+      },
+      {
+        local_key: "derived-pe",
+        group_code: groups.find((group) => group.code === "input_power")?.code ?? null,
+        code: "PE",
+        role: "protective_earth",
+        logical_type: "protective_earth",
+        direction: "bidirectional",
+        source: "derived",
+        sort_order: 1,
+      },
+      {
+        local_key: "derived-24v-out",
+        group_code: groups.find((group) => group.code === "output_power")?.code ?? null,
+        code: "+24V_OUT",
+        role: "positive_output",
+        logical_type: "power",
+        direction: "out",
+        source: "derived",
+        sort_order: 2,
+      },
+      {
+        local_key: "derived-0v-out",
+        group_code: groups.find((group) => group.code === "output_power")?.code ?? null,
+        code: "0V_OUT",
+        role: "return_output",
+        logical_type: "power",
+        direction: "out",
+        source: "derived",
+        sort_order: 3,
+      },
+    );
+  }
+
+  return interfaces;
+}
+
+function mergeInterfaces(
+  derivedInterfaces: EditableInterface[],
+  currentInterfaces: EditableInterface[],
+  disabledCodes: string[],
+): EditableInterface[] {
+  const disabled = new Set(disabledCodes.map(normalizeInterfaceCode));
+  const overrides = currentInterfaces.filter((item) => item.source === "override");
+  const visibleDerived = derivedInterfaces.filter(
+    (item) => !disabled.has(normalizeInterfaceCode(item.code)),
+  );
+
+  return [...visibleDerived, ...overrides]
+    .sort((left, right) => left.sort_order - right.sort_order || left.code.localeCompare(right.code))
+      .map((item) => ({
+      ...item,
+      local_key: item.local_key || createLocalKey(),
+    }));
+}
+
+function normalizeGroup(
+  group: EquipmentTypicalDetail["interface_groups"][number],
+): EditableInterfaceGroup {
+  return {
+    local_key: group.id,
+    code: group.code,
+    name: group.name,
+    category: group.category,
+    side: group.side ?? "",
+    source: group.source === "custom" ? "custom" : "profile",
+    sort_order: group.sort_order,
   };
 }
 
@@ -285,6 +574,9 @@ function serializeEditorState(args: {
   typicalCode: string;
   typicalDescription: string;
   definitions: GovernedParameterDefinition[];
+  interfaceGroups: EditableInterfaceGroup[];
+  interfaces: EditableInterface[];
+  disabledInterfaceCodes: string[];
 }): string {
   return JSON.stringify({
     mode: args.mode,
@@ -309,6 +601,28 @@ function serializeEditorState(args: {
         sort_order: definition.sort_order,
       }))
       .sort((left, right) => left.sort_order - right.sort_order),
+    interface_groups: args.interfaceGroups
+      .map((group) => ({
+        code: group.code,
+        name: group.name,
+        category: group.category,
+        side: group.side,
+        source: group.source,
+        sort_order: group.sort_order,
+      }))
+      .sort((left, right) => left.sort_order - right.sort_order || left.code.localeCompare(right.code)),
+    interfaces: args.interfaces
+      .map((item) => ({
+        group_code: item.group_code,
+        code: item.code,
+        role: item.role,
+        logical_type: item.logical_type,
+        direction: item.direction,
+        source: item.source,
+        sort_order: item.sort_order,
+      }))
+      .sort((left, right) => left.sort_order - right.sort_order || left.code.localeCompare(right.code)),
+    disabled_interface_codes: [...args.disabledInterfaceCodes].sort(),
   });
 }
 
@@ -326,6 +640,9 @@ export default function App() {
   const [typicalCode, setTypicalCode] = useState("");
   const [typicalDescription, setTypicalDescription] = useState("");
   const [definitions, setDefinitions] = useState<GovernedParameterDefinition[]>([]);
+  const [interfaceGroups, setInterfaceGroups] = useState<EditableInterfaceGroup[]>([]);
+  const [interfaces, setInterfaces] = useState<EditableInterface[]>([]);
+  const [disabledInterfaceCodes, setDisabledInterfaceCodes] = useState<string[]>([]);
   const [presets, setPresets] = useState<ParameterDefinitionPreset[]>([]);
   const [presetSelection, setPresetSelection] = useState<Record<string, string>>({});
   const [validation, setValidation] = useState<TypicalValidationResult | null>(null);
@@ -358,8 +675,22 @@ export default function App() {
         typicalCode,
         typicalDescription,
         definitions,
+        interfaceGroups,
+        interfaces,
+        disabledInterfaceCodes,
       }),
-    [definitions, mode, selectedClassId, selectedTypicalId, typicalCode, typicalDescription, typicalName],
+    [
+      definitions,
+      interfaceGroups,
+      disabledInterfaceCodes,
+      interfaces,
+      mode,
+      selectedClassId,
+      selectedTypicalId,
+      typicalCode,
+      typicalDescription,
+      typicalName,
+    ],
   );
   const isDirty = savedSnapshot !== "" && currentSnapshot !== savedSnapshot;
 
@@ -397,15 +728,18 @@ export default function App() {
           setSelectedClassId(classesPayload[0].id);
         }
         setSavedSnapshot(
-          serializeEditorState({
-            mode: "create",
-            selectedTypicalId: null,
-            selectedClassId: classesPayload[0]?.id ?? "",
-            typicalName: "",
-            typicalCode: "",
-            typicalDescription: "",
-            definitions: [],
-          }),
+      serializeEditorState({
+        mode: "create",
+        selectedTypicalId: null,
+        selectedClassId: classesPayload[0]?.id ?? "",
+        typicalName: "",
+        typicalCode: "",
+        typicalDescription: "",
+        definitions: [],
+        interfaceGroups: [],
+        interfaces: [],
+        disabledInterfaceCodes: [],
+      }),
         );
       } catch (err) {
         setError(err instanceof Error ? err.message : "Unknown error");
@@ -421,6 +755,9 @@ export default function App() {
         setClassDetail(null);
         if (mode === "create") {
           setDefinitions([]);
+          setInterfaceGroups([]);
+          setInterfaces([]);
+          setDisabledInterfaceCodes([]);
         }
         return;
       }
@@ -430,6 +767,9 @@ export default function App() {
         setClassDetail(null);
         if (mode === "create") {
           setDefinitions([]);
+          setInterfaceGroups([]);
+          setInterfaces([]);
+          setDisabledInterfaceCodes([]);
         }
         return;
       }
@@ -438,17 +778,35 @@ export default function App() {
       setClassDetail(payload);
 
       if (mode === "create") {
-        const recommended = new Set(recommendedFeatures(selectedClass, payload));
-        setDefinitions(
+        const selectedClassSummary = classes.find((item) => item.id === selectedClassId) ?? {
+          id: payload.id,
+          description: payload.description,
+          version: payload.version,
+          group_id: payload.group_id,
+        };
+        const recommended = new Set(recommendedFeatures(selectedClassSummary, payload));
+        const nextDefinitions = ensureTemplateDefinitions(
+          inferTemplate(selectedClassSummary),
           payload.features
-            .filter((feature) => recommended.has(feature.art_class_feature_nr))
-            .map(createDefinitionFromFeature),
+          .filter((feature) => recommended.has(feature.art_class_feature_nr))
+          .map(createDefinitionFromFeature),
+        );
+        const nextGroups = defaultInterfaceGroups(inferTemplate(selectedClassSummary));
+        setDefinitions(nextDefinitions);
+        setInterfaceGroups(nextGroups);
+        setDisabledInterfaceCodes([]);
+        setInterfaces(
+          deriveInterfacesFromDefinitions(
+            inferTemplate(selectedClassSummary),
+            nextDefinitions,
+            nextGroups,
+          ),
         );
       }
     }
 
     void loadClassDetail();
-  }, [selectedClassId, mode, selectedClass]);
+  }, [classes, mode, selectedClassId]);
 
   useEffect(() => {
     if (mode === "edit") return;
@@ -633,6 +991,24 @@ export default function App() {
         sort_order: definition.sort_order,
       })),
       parameters: [],
+      interface_groups: interfaceGroups.map((group) => ({
+        code: group.code,
+        name: group.name,
+        category: group.category,
+        side: group.side || null,
+        source: group.source,
+        sort_order: group.sort_order,
+      })),
+      interfaces: interfaces.map((item) => ({
+        group_code: item.group_code,
+        code: item.code,
+        role: item.role,
+        logical_type: item.logical_type,
+        direction: item.direction,
+        source: item.source,
+        sort_order: item.sort_order,
+      })),
+      disabled_interface_codes: disabledInterfaceCodes,
     };
   }
 
@@ -726,15 +1102,141 @@ export default function App() {
     });
   }
 
-  function updateDefinition(
-    featureKey: string,
-    patch: Partial<GovernedParameterDefinition>,
-  ) {
-    setDefinitions((current) =>
-      current.map((definition) =>
+  function updateDefinition(featureKey: string, patch: Partial<GovernedParameterDefinition>) {
+    setDefinitions((current) => {
+      const nextDefinitions = current.map((definition) =>
         definition.feature_key === featureKey ? { ...definition, ...patch } : definition,
-      ),
+      );
+
+      const changedDefinition = nextDefinitions.find((definition) => definition.feature_key === featureKey);
+      const shouldRefreshInterfaces =
+        inferTemplate(selectedClass) !== null &&
+        (
+          changedDefinition?.drives_interfaces ||
+          changedDefinition?.code.toLowerCase() === "power_topology" ||
+          patch.drives_interfaces !== undefined ||
+          patch.default_value !== undefined
+        );
+
+      if (shouldRefreshInterfaces) {
+        const nextDerived = deriveInterfacesFromDefinitions(
+          inferTemplate(selectedClass),
+          nextDefinitions,
+          interfaceGroups,
+        );
+        setInterfaces((existing) => mergeInterfaces(nextDerived, existing, disabledInterfaceCodes));
+      }
+
+      return nextDefinitions;
+    });
+  }
+
+  function regenerateInterfaces() {
+    const nextDerived = deriveInterfacesFromDefinitions(
+      inferTemplate(selectedClass),
+      definitions,
+      interfaceGroups,
     );
+    setInterfaces((current) => mergeInterfaces(nextDerived, current, disabledInterfaceCodes));
+  }
+
+  function addInterfaceGroup() {
+    setInterfaceGroups((current) => [
+      ...current,
+      {
+        local_key: createLocalKey(),
+        code: `custom_group_${current.length + 1}`,
+        name: `Custom group ${current.length + 1}`,
+        category: "custom",
+        side: "",
+        source: "custom",
+        sort_order: current.length,
+      },
+    ]);
+  }
+
+  function updateInterfaceGroup(localKey: string, patch: Partial<EditableInterfaceGroup>) {
+    const currentCode = interfaceGroups.find((group) => group.local_key === localKey)?.code;
+    setInterfaceGroups((current) =>
+      current.map((group) => (group.local_key === localKey ? { ...group, ...patch } : group)),
+    );
+    if (patch.code !== undefined && currentCode) {
+      setInterfaces((current) =>
+        current.map((item) =>
+          item.group_code === currentCode ? { ...item, group_code: patch.code || null } : item,
+        ),
+      );
+    }
+  }
+
+  function deleteInterfaceGroup(localKey: string) {
+    const target = interfaceGroups.find((group) => group.local_key === localKey);
+    setInterfaceGroups((current) => current.filter((group) => group.local_key !== localKey));
+    if (target) {
+      setInterfaces((current) =>
+        current.map((item) =>
+          item.group_code === target.code ? { ...item, group_code: null, source: "override" } : item,
+        ),
+      );
+    }
+  }
+
+  function addOverrideInterface() {
+    setInterfaces((current) => [
+      ...current,
+      {
+        local_key: createLocalKey(),
+        group_code: interfaceGroups[0]?.code ?? null,
+        code: "",
+        role: "",
+        logical_type: "signal",
+        direction: "bidirectional",
+        source: "override",
+        sort_order: current.length,
+      },
+    ]);
+  }
+
+  function updateInterface(localKey: string, patch: Partial<EditableInterface>) {
+    setInterfaces((current) =>
+      current.map((item) => {
+        if (item.local_key !== localKey) {
+          return item;
+        }
+
+        if (item.source === "derived") {
+          setDisabledInterfaceCodes((existing) => {
+            const normalized = normalizeInterfaceCode(item.code);
+            return existing.includes(normalized) ? existing : [...existing, normalized];
+          });
+          return {
+            ...item,
+            ...patch,
+            source: "override" as const,
+          };
+        }
+
+        return { ...item, ...patch };
+      }),
+    );
+  }
+
+  function deleteInterface(localKey: string) {
+    setInterfaces((current) => {
+      const target = current.find((item) => item.local_key === localKey);
+      if (!target) {
+        return current;
+      }
+
+      if (target.source === "derived") {
+        setDisabledInterfaceCodes((existing) => {
+          const normalized = normalizeInterfaceCode(target.code);
+          return existing.includes(normalized) ? existing : [...existing, normalized];
+        });
+      }
+
+      return current.filter((item) => item.local_key !== localKey);
+    });
   }
 
   async function handleEditTypical(typicalId: string, skipDirtyCheck = false) {
@@ -765,27 +1267,68 @@ export default function App() {
 
       const nextDefinitions =
         payload.parameter_definitions.length > 0
-          ? payload.parameter_definitions.map((definition) =>
-              normalizeDefinition(definition, detail),
+          ? ensureTemplateDefinitions(
+              payload.template_key ?? inferTemplate(detail ?? undefined),
+              payload.parameter_definitions.map((definition) =>
+                normalizeDefinition(definition, detail),
+              ),
             )
-          : payload.parameters.map((parameter) => ({
-              feature_key: parameter.code.toUpperCase(),
-              code: parameter.code,
-              name: parameter.name,
-              source: parameter.source,
-              input_type: parameter.data_type,
-              unit: parameter.unit,
-              default_value: parameter.value ?? "",
-              allowed_values: [],
-              allowed_values_text: "",
-              required: parameter.required === 1,
-              is_parametrizable: parameter.is_parametrizable === 1,
-              drives_interfaces: parameter.drives_interfaces === 1,
-              sort_order: parameter.sort_order,
-            }));
+          : ensureTemplateDefinitions(
+              payload.template_key ?? inferTemplate(detail ?? undefined),
+              payload.parameters.map((parameter) => ({
+                feature_key: parameter.code.toUpperCase(),
+                code: parameter.code,
+                name: parameter.name,
+                source: parameter.source,
+                input_type: parameter.data_type,
+                unit: parameter.unit,
+                default_value: parameter.value ?? "",
+                allowed_values: [],
+                allowed_values_text: "",
+                required: parameter.required === 1,
+                is_parametrizable: parameter.is_parametrizable === 1,
+                drives_interfaces: parameter.drives_interfaces === 1,
+                sort_order: parameter.sort_order,
+              })),
+            );
+
+      const nextGroups =
+        payload.interface_groups.length > 0
+          ? payload.interface_groups.map(normalizeGroup)
+          : defaultInterfaceGroups(payload.template_key ?? inferTemplate(detail ?? undefined));
 
       const sortedDefinitions = nextDefinitions.sort((left, right) => left.sort_order - right.sort_order);
+      const nextDerived = deriveInterfacesFromDefinitions(
+        payload.template_key ?? inferTemplate(detail ?? undefined),
+        sortedDefinitions,
+        nextGroups,
+      );
+      const savedInterfaces: EditableInterface[] = payload.interfaces
+        .slice()
+        .sort((left, right) => left.sort_order - right.sort_order || left.code.localeCompare(right.code))
+        .map((item, index) => ({
+          local_key: item.id || `${item.source}-${index}`,
+          group_code: item.group_code,
+          code: item.code,
+          role: item.role,
+          logical_type: item.logical_type,
+          direction: item.direction,
+          source: item.source === "override" ? "override" : "derived",
+          sort_order: item.sort_order,
+        }));
+      const disabledCodes = nextDerived
+        .map((item) => normalizeInterfaceCode(item.code))
+        .filter(
+          (code) =>
+            !savedInterfaces.some(
+              (saved) => saved.source === "derived" && normalizeInterfaceCode(saved.code) === code,
+            ),
+        );
+
       setDefinitions(sortedDefinitions);
+      setInterfaceGroups(nextGroups);
+      setInterfaces(savedInterfaces);
+      setDisabledInterfaceCodes(disabledCodes);
       setSavedSnapshot(
         serializeEditorState({
           mode: "edit",
@@ -795,6 +1338,9 @@ export default function App() {
           typicalCode: payload.code,
           typicalDescription: payload.description ?? "",
           definitions: sortedDefinitions,
+          interfaceGroups: nextGroups,
+          interfaces: savedInterfaces,
+          disabledInterfaceCodes: disabledCodes,
         }),
       );
     } catch (err) {
@@ -813,13 +1359,25 @@ export default function App() {
     setError(null);
     if (selectedClass && classDetail) {
       const recommended = new Set(recommendedFeatures(selectedClass, classDetail));
-      const nextDefinitions = classDetail.features
+      const nextDefinitions = ensureTemplateDefinitions(
+        inferTemplate(selectedClass),
+        classDetail.features
         .filter((feature) => recommended.has(feature.art_class_feature_nr))
-        .map(createDefinitionFromFeature);
+        .map(createDefinitionFromFeature),
+      );
+      const nextGroups = defaultInterfaceGroups(inferTemplate(selectedClass));
+      const nextInterfaces = deriveInterfacesFromDefinitions(
+        inferTemplate(selectedClass),
+        nextDefinitions,
+        nextGroups,
+      );
       setTypicalName(selectedClass.description);
       setTypicalCode(`typ-${slugify(selectedClass.description)}-${selectedClass.id.toLowerCase()}`);
       setTypicalDescription(`Typical gebaseerd op ${selectedClass.description}`);
       setDefinitions(nextDefinitions);
+      setInterfaceGroups(nextGroups);
+      setInterfaces(nextInterfaces);
+      setDisabledInterfaceCodes([]);
       setSavedSnapshot(
         serializeEditorState({
           mode: "create",
@@ -829,6 +1387,9 @@ export default function App() {
           typicalCode: `typ-${slugify(selectedClass.description)}-${selectedClass.id.toLowerCase()}`,
           typicalDescription: `Typical gebaseerd op ${selectedClass.description}`,
           definitions: nextDefinitions,
+          interfaceGroups: nextGroups,
+          interfaces: nextInterfaces,
+          disabledInterfaceCodes: [],
         }),
       );
     } else {
@@ -836,6 +1397,9 @@ export default function App() {
       setTypicalCode("");
       setTypicalDescription("");
       setDefinitions([]);
+      setInterfaceGroups([]);
+      setInterfaces([]);
+      setDisabledInterfaceCodes([]);
       setSavedSnapshot(
         serializeEditorState({
           mode: "create",
@@ -845,6 +1409,9 @@ export default function App() {
           typicalCode: "",
           typicalDescription: "",
           definitions: [],
+          interfaceGroups: [],
+          interfaces: [],
+          disabledInterfaceCodes: [],
         }),
       );
     }
@@ -1242,6 +1809,231 @@ export default function App() {
                   )})}
               </div>
             )}
+            <div className="editor-actions">
+              <button disabled={!selectedClassId || submitting} onClick={handleSaveTypical} type="button">
+                {submitting
+                  ? mode === "edit"
+                    ? "Opslaan..."
+                    : "Aanmaken..."
+                  : mode === "edit"
+                    ? "Sla wijzigingen op"
+                    : "Maak Equipment Typical"}
+              </button>
+              <button
+                className="secondary-button"
+                disabled={!selectedClassId || validating}
+                onClick={handleValidateTypical}
+                type="button"
+              >
+                {validating ? "Valideren..." : "Valideer"}
+              </button>
+            </div>
+          </div>
+
+          <div className="interfaces-panel">
+            <div className="editor-header">
+              <h3>Interfaces</h3>
+              <div className="editor-actions">
+                <button
+                  className="secondary-button"
+                  onClick={addInterfaceGroup}
+                  type="button"
+                >
+                  Voeg groep toe
+                </button>
+                <button
+                  className="secondary-button"
+                  onClick={regenerateInterfaces}
+                  type="button"
+                >
+                  Herleid opnieuw
+                </button>
+                <button
+                  className="secondary-button"
+                  onClick={addOverrideInterface}
+                  type="button"
+                >
+                  Voeg override toe
+                </button>
+              </div>
+            </div>
+            <p className="helper-text">
+              Afgeleide interfaces volgen de template en parameterdefinitions. Bij aanpassen wordt een
+              afgeleide interface omgezet naar een override.
+            </p>
+            <div className="group-list">
+              {interfaceGroups.length === 0 ? (
+                <p className="empty-state">Nog geen interfacegroepen gedefinieerd.</p>
+              ) : (
+                interfaceGroups
+                  .slice()
+                  .sort((left, right) => left.sort_order - right.sort_order || left.code.localeCompare(right.code))
+                  .map((group) => (
+                    <article className="group-card" key={group.local_key}>
+                      <div className="definition-head">
+                        <strong>{group.name}</strong>
+                        <small>{group.code}</small>
+                      </div>
+                      <div className="definition-grid">
+                        <label className="field">
+                          <span>Code</span>
+                          <input
+                            value={group.code}
+                            onChange={(event) =>
+                              updateInterfaceGroup(group.local_key, { code: event.target.value })
+                            }
+                          />
+                        </label>
+                        <label className="field">
+                          <span>Naam</span>
+                          <input
+                            value={group.name}
+                            onChange={(event) =>
+                              updateInterfaceGroup(group.local_key, { name: event.target.value })
+                            }
+                          />
+                        </label>
+                        <label className="field">
+                          <span>Categorie</span>
+                          <input
+                            value={group.category}
+                            onChange={(event) =>
+                              updateInterfaceGroup(group.local_key, { category: event.target.value })
+                            }
+                          />
+                        </label>
+                        <label className="field">
+                          <span>Side</span>
+                          <input
+                            value={group.side}
+                            onChange={(event) =>
+                              updateInterfaceGroup(group.local_key, { side: event.target.value })
+                            }
+                          />
+                        </label>
+                      </div>
+                      <div className="preset-row">
+                        <span className="helper-text">Bron: {group.source}</span>
+                        <button
+                          className="delete-button"
+                          onClick={() => deleteInterfaceGroup(group.local_key)}
+                          type="button"
+                        >
+                          Verwijder groep
+                        </button>
+                      </div>
+                    </article>
+                  ))
+              )}
+            </div>
+            {interfaces.length === 0 ? (
+              <p className="empty-state">Nog geen interfaces beschikbaar.</p>
+            ) : (
+              <div className="interface-list">
+                {interfaces.map((item) => (
+                  <article className="interface-card" key={item.local_key}>
+                    <div className="definition-head">
+                      <strong>{item.code || "Nieuwe interface"}</strong>
+                      <small>{item.source === "override" ? "override" : "derived"}</small>
+                    </div>
+                    <div className="definition-grid">
+                      <label className="field">
+                        <span>Groep</span>
+                        <select
+                          value={item.group_code ?? ""}
+                          onChange={(event) =>
+                            updateInterface(item.local_key, { group_code: event.target.value || null })
+                          }
+                        >
+                          <option value="">Geen groep</option>
+                          {interfaceGroups.map((group) => (
+                            <option key={group.local_key} value={group.code}>
+                              {group.name} ({group.code})
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="field">
+                        <span>Code</span>
+                        <input
+                          value={item.code}
+                          onChange={(event) =>
+                            updateInterface(item.local_key, { code: event.target.value })
+                          }
+                          placeholder="Bijv. L1_IN"
+                        />
+                      </label>
+                      <label className="field">
+                        <span>Rol</span>
+                        <input
+                          value={item.role}
+                          onChange={(event) =>
+                            updateInterface(item.local_key, { role: event.target.value })
+                          }
+                          placeholder="Bijv. line_in"
+                        />
+                      </label>
+                      <label className="field">
+                        <span>Type</span>
+                        <select
+                          value={item.logical_type}
+                          onChange={(event) =>
+                            updateInterface(item.local_key, { logical_type: event.target.value })
+                          }
+                        >
+                          <option value="power">power</option>
+                          <option value="signal">signal</option>
+                          <option value="data">data</option>
+                          <option value="protective_earth">protective_earth</option>
+                        </select>
+                      </label>
+                      <label className="field">
+                        <span>Richting</span>
+                        <select
+                          value={item.direction}
+                          onChange={(event) =>
+                            updateInterface(item.local_key, { direction: event.target.value })
+                          }
+                        >
+                          <option value="in">in</option>
+                          <option value="out">out</option>
+                          <option value="bidirectional">bidirectional</option>
+                        </select>
+                      </label>
+                    </div>
+                    <div className="preset-row">
+                      <span className="helper-text">Bron: {item.source}</span>
+                      <button
+                        className="delete-button"
+                        onClick={() => deleteInterface(item.local_key)}
+                        type="button"
+                      >
+                        Verwijder
+                      </button>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            )}
+            <div className="editor-actions">
+              <button disabled={!selectedClassId || submitting} onClick={handleSaveTypical} type="button">
+                {submitting
+                  ? mode === "edit"
+                    ? "Opslaan..."
+                    : "Aanmaken..."
+                  : mode === "edit"
+                    ? "Sla wijzigingen op"
+                    : "Maak Equipment Typical"}
+              </button>
+              <button
+                className="secondary-button"
+                disabled={!selectedClassId || validating}
+                onClick={handleValidateTypical}
+                type="button"
+              >
+                {validating ? "Valideren..." : "Valideer"}
+              </button>
+            </div>
           </div>
 
           <div className="validation-panel">

@@ -5,17 +5,99 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from app.etim_repository import get_class_detail
-from app.models import EquipmentTypical, TypicalInterface, TypicalParameter, TypicalParameterDefinition
+from app.models import (
+    EquipmentTypical,
+    TypicalInterface,
+    TypicalInterfaceGroup,
+    TypicalParameter,
+    TypicalParameterDefinition,
+)
 from app.schemas import EquipmentTypicalCreate, EquipmentTypicalUpdate, TypicalValidationResult, ValidationIssue
 
 
-def derive_interfaces(payload: EquipmentTypicalCreate) -> list[TypicalInterface]:
+SWITCH_TOPOLOGIES: dict[str, list[str]] = {
+    "L": ["L"],
+    "L+N": ["L", "N"],
+    "3L": ["L1", "L2", "L3"],
+    "3L+N": ["L1", "L2", "L3", "N"],
+}
+
+
+def default_interface_groups(payload: EquipmentTypicalCreate) -> list[TypicalInterfaceGroup]:
+    if payload.template_key == "multi_pole_switch_device":
+        return [
+            TypicalInterfaceGroup(
+                code="input_power",
+                name="Input power",
+                category="power_input",
+                side="line",
+                source="profile",
+                sort_order=0,
+            ),
+            TypicalInterfaceGroup(
+                code="output_power",
+                name="Output power",
+                category="power_output",
+                side="load",
+                source="profile",
+                sort_order=1,
+            ),
+        ]
+
+    if payload.template_key == "dc_power_supply":
+        return [
+            TypicalInterfaceGroup(
+                code="input_power",
+                name="Input power",
+                category="power_input",
+                side="primary",
+                source="profile",
+                sort_order=0,
+            ),
+            TypicalInterfaceGroup(
+                code="output_power",
+                name="Output power",
+                category="power_output",
+                side="secondary",
+                source="profile",
+                sort_order=1,
+            ),
+        ]
+
+    return []
+
+
+def build_interface_groups(payload: EquipmentTypicalCreate) -> list[TypicalInterfaceGroup]:
+    groups = payload.interface_groups or default_interface_groups(payload)
+    return [
+        TypicalInterfaceGroup(
+            code=group.code,
+            name=group.name,
+            category=group.category,
+            side=group.side,
+            source=group.source,
+            sort_order=group.sort_order,
+        )
+        for group in groups
+    ]
+
+
+def _source_parameters(payload: EquipmentTypicalCreate):
+    return payload.parameter_definitions or payload.parameters
+
+
+def resolve_switch_topology(payload: EquipmentTypicalCreate) -> str:
+    source_parameters = _source_parameters(payload)
     pole_count = 1
-    source_parameters = payload.parameter_definitions or payload.parameters
+
     for parameter in source_parameters:
         parameter_code = parameter.code.lower()
         parameter_name = parameter.name.lower()
-        parameter_value = getattr(parameter, "default_value", None) or getattr(parameter, "value", None)
+        parameter_value = (getattr(parameter, "default_value", None) or getattr(parameter, "value", None) or "").strip()
+
+        if parameter_code == "power_topology" and parameter_value in SWITCH_TOPOLOGIES:
+            return parameter_value
+
         if (
             parameter_value
             and (
@@ -28,13 +110,23 @@ def derive_interfaces(payload: EquipmentTypicalCreate) -> list[TypicalInterface]
             except ValueError:
                 pole_count = 1
 
+    return {
+        1: "L",
+        2: "L+N",
+        3: "3L",
+        4: "3L+N",
+    }.get(pole_count, "L")
+
+
+def derive_interfaces(payload: EquipmentTypicalCreate) -> list[TypicalInterface]:
     interfaces: list[TypicalInterface] = []
     if payload.template_key == "multi_pole_switch_device":
-        labels = ["L1", "L2", "L3", "N"]
-        for index in range(pole_count):
-            label = labels[index] if index < len(labels) else f"P{index + 1}"
+        topology = resolve_switch_topology(payload)
+        labels = SWITCH_TOPOLOGIES.get(topology, SWITCH_TOPOLOGIES["L"])
+        for index, label in enumerate(labels):
             interfaces.append(
                 TypicalInterface(
+                    group_code="input_power",
                     code=f"{label}_IN",
                     role="line_in",
                     logical_type="power",
@@ -45,6 +137,7 @@ def derive_interfaces(payload: EquipmentTypicalCreate) -> list[TypicalInterface]
             )
             interfaces.append(
                 TypicalInterface(
+                    group_code="output_power",
                     code=f"{label}_OUT",
                     role="load_out",
                     logical_type="power",
@@ -57,6 +150,7 @@ def derive_interfaces(payload: EquipmentTypicalCreate) -> list[TypicalInterface]
         interfaces.extend(
             [
                 TypicalInterface(
+                    group_code="input_power",
                     code="AC_IN",
                     role="power_input",
                     logical_type="power",
@@ -65,6 +159,7 @@ def derive_interfaces(payload: EquipmentTypicalCreate) -> list[TypicalInterface]
                     sort_order=0,
                 ),
                 TypicalInterface(
+                    group_code="input_power",
                     code="PE",
                     role="protective_earth",
                     logical_type="protective_earth",
@@ -73,6 +168,7 @@ def derive_interfaces(payload: EquipmentTypicalCreate) -> list[TypicalInterface]
                     sort_order=1,
                 ),
                 TypicalInterface(
+                    group_code="output_power",
                     code="+24V_OUT",
                     role="positive_output",
                     logical_type="power",
@@ -81,6 +177,7 @@ def derive_interfaces(payload: EquipmentTypicalCreate) -> list[TypicalInterface]
                     sort_order=2,
                 ),
                 TypicalInterface(
+                    group_code="output_power",
                     code="0V_OUT",
                     role="return_output",
                     logical_type="power",
@@ -94,9 +191,36 @@ def derive_interfaces(payload: EquipmentTypicalCreate) -> list[TypicalInterface]
     return interfaces
 
 
+def build_interfaces(payload: EquipmentTypicalCreate) -> list[TypicalInterface]:
+    disabled_codes = {code.strip().upper() for code in payload.disabled_interface_codes if code.strip()}
+    derived_interfaces = derive_interfaces(payload)
+    visible_derived = [
+        interface for interface in derived_interfaces if interface.code.strip().upper() not in disabled_codes
+    ]
+
+    override_interfaces = [
+        TypicalInterface(
+            group_code=interface.group_code,
+            code=interface.code,
+            role=interface.role,
+            logical_type=interface.logical_type,
+            direction=interface.direction,
+            source="override",
+            sort_order=interface.sort_order,
+        )
+        for interface in payload.interfaces
+        if interface.source == "override"
+    ]
+
+    all_interfaces = visible_derived + override_interfaces
+    return sorted(all_interfaces, key=lambda interface: (interface.sort_order, interface.code))
+
+
 def validate_typical_payload(payload: EquipmentTypicalCreate) -> TypicalValidationResult:
     issues: list[ValidationIssue] = []
     definitions = payload.parameter_definitions
+    groups = build_interface_groups(payload)
+    interfaces = build_interfaces(payload)
 
     if not payload.name.strip():
         issues.append(
@@ -282,6 +406,121 @@ def validate_typical_payload(payload: EquipmentTypicalCreate) -> TypicalValidati
                 )
             )
 
+        if definition.code.strip().lower() == "power_topology":
+            invalid_values = [value for value in allowed_values if value not in SWITCH_TOPOLOGIES]
+            if invalid_values:
+                issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        code="invalid_power_topology_allowed_value",
+                        message=f"Power topology bevat ongeldige waarde(n): {', '.join(invalid_values)}.",
+                        parameter_code=definition.code,
+                        parameter_name=definition.name,
+                    )
+                )
+
+            if default_value and default_value not in SWITCH_TOPOLOGIES:
+                issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        code="invalid_power_topology_default",
+                        message=f"Power topology default '{default_value}' is ongeldig.",
+                        parameter_code=definition.code,
+                        parameter_name=definition.name,
+                    )
+                )
+
+    seen_group_codes: set[str] = set()
+    for group in groups:
+        normalized_group_code = group.code.strip().lower()
+        if not normalized_group_code:
+            issues.append(
+                ValidationIssue(
+                    severity="error",
+                    code="missing_interface_group_code",
+                    message="Interfacegroepcode ontbreekt.",
+                )
+            )
+            continue
+
+        if not group.name.strip():
+            issues.append(
+                ValidationIssue(
+                    severity="error",
+                    code="missing_interface_group_name",
+                    message=f"Interfacegroep '{group.code or 'zonder code'}' heeft geen naam.",
+                )
+            )
+
+        if not group.category.strip():
+            issues.append(
+                ValidationIssue(
+                    severity="error",
+                    code="missing_interface_group_category",
+                    message=f"Interfacegroep '{group.code}' heeft geen categorie.",
+                )
+            )
+
+        if normalized_group_code in seen_group_codes:
+            issues.append(
+                ValidationIssue(
+                    severity="error",
+                    code="duplicate_interface_group_code",
+                    message=f"Interfacegroepcode '{group.code}' komt meer dan eens voor.",
+                )
+            )
+        seen_group_codes.add(normalized_group_code)
+
+    seen_interface_codes: set[str] = set()
+    for interface in interfaces:
+        normalized_code = interface.code.strip().lower()
+        if not normalized_code:
+            issues.append(
+                ValidationIssue(
+                    severity="error",
+                    code="missing_interface_code",
+                    message="Interfacecode ontbreekt.",
+                )
+            )
+            continue
+
+        if normalized_code in seen_interface_codes:
+            issues.append(
+                ValidationIssue(
+                    severity="error",
+                    code="duplicate_interface_code",
+                    message=f"Interfacecode '{interface.code}' komt meer dan eens voor.",
+                )
+            )
+        seen_interface_codes.add(normalized_code)
+
+        if interface.group_code and interface.group_code.strip().lower() not in seen_group_codes:
+            issues.append(
+                ValidationIssue(
+                    severity="error",
+                    code="interface_group_missing",
+                    message=f"Interface '{interface.code}' verwijst naar een onbekende interfacegroep.",
+                )
+            )
+
+        if not interface.role.strip():
+            issues.append(
+                ValidationIssue(
+                    severity="error",
+                    code="missing_interface_role",
+                    message=f"Interface '{interface.code}' heeft geen rol.",
+                )
+            )
+
+        if interface.direction.strip() not in {"in", "out", "bidirectional"}:
+            issues.append(
+                ValidationIssue(
+                    severity="error",
+                    code="invalid_interface_direction",
+                    message=f"Interface '{interface.code}' heeft een ongeldige richting.",
+                )
+            )
+
     return TypicalValidationResult(
         valid=not any(issue.severity == "error" for issue in issues),
         issues=issues,
@@ -361,6 +600,12 @@ def _build_parameters(payload: EquipmentTypicalCreate) -> list[TypicalParameter]
     ]
 
 
+def _normalize_interface_groups(typical: EquipmentTypical) -> EquipmentTypical:
+    typical.interface_groups = sorted(typical.interface_groups, key=lambda item: (item.sort_order, item.code))
+    typical.interfaces = sorted(typical.interfaces, key=lambda item: (item.sort_order, item.code))
+    return typical
+
+
 def _normalize_allowed_values(typical: EquipmentTypical) -> EquipmentTypical:
     for definition in typical.parameter_definitions:
         raw_value = definition.allowed_values
@@ -373,7 +618,7 @@ def _normalize_allowed_values(typical: EquipmentTypical) -> EquipmentTypical:
                 )
         else:
             definition.allowed_values = json.dumps([])
-    return typical
+    return _normalize_interface_groups(typical)
 
 
 def create_typical(db: Session, payload: EquipmentTypicalCreate) -> EquipmentTypical:
@@ -394,7 +639,8 @@ def create_typical(db: Session, payload: EquipmentTypicalCreate) -> EquipmentTyp
 
     typical.parameter_definitions = _build_parameter_definitions(payload)
     typical.parameters = _build_parameters(payload)
-    typical.interfaces = derive_interfaces(payload)
+    typical.interface_groups = build_interface_groups(payload)
+    typical.interfaces = build_interfaces(payload)
 
     db.add(typical)
     try:
@@ -434,8 +680,11 @@ def update_typical(db: Session, typical_id: str, payload: EquipmentTypicalUpdate
     typical.parameters.clear()
     typical.parameters.extend(_build_parameters(payload))
 
+    typical.interface_groups.clear()
+    typical.interface_groups.extend(build_interface_groups(payload))
+
     typical.interfaces.clear()
-    typical.interfaces.extend(derive_interfaces(payload))
+    typical.interfaces.extend(build_interfaces(payload))
 
     try:
         db.commit()
@@ -456,6 +705,7 @@ def list_typicals(db: Session) -> list[EquipmentTypical]:
         .options(
             selectinload(EquipmentTypical.parameter_definitions),
             selectinload(EquipmentTypical.parameters),
+            selectinload(EquipmentTypical.interface_groups),
             selectinload(EquipmentTypical.interfaces),
         )
         .order_by(EquipmentTypical.updated_at.desc())
@@ -470,6 +720,7 @@ def get_typical(db: Session, typical_id: str) -> EquipmentTypical | None:
         .options(
             selectinload(EquipmentTypical.parameter_definitions),
             selectinload(EquipmentTypical.parameters),
+            selectinload(EquipmentTypical.interface_groups),
             selectinload(EquipmentTypical.interfaces),
         )
     )

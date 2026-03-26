@@ -51,7 +51,9 @@ Buiten scope voor V1:
 - `TypicalVersion`
 - `TypicalParameter`
 - `TypicalParameterDefinition`
+- `TypicalInterfaceGroup`
 - `TypicalInterface`
+- `TypicalInterfaceMappingRule`
 - `InterfaceRule`
 - `TypicalConstraint`
 - `TypicalOverride`
@@ -151,11 +153,50 @@ Interfaces worden hybride opgebouwd:
 - de gebruiker kan dat voorstel aanpassen
 - manuele afwijkingen worden als override opgeslagen
 
+Het model maakt daarbij onderscheid tussen:
+
+- `TypicalInterfaceGroup`
+  - bijvoorbeeld `input_power`, `output_power`, `signal`, `protective_earth`
+- `TypicalInterface`
+  - concrete interface binnen zo'n groep
+- `driver parameters`
+  - parameters die de interfacecombinatie sturen
+
 Voorbeeld:
 
-- een automaat met `number_of_poles = 3` genereert standaard:
-  - `L1_IN`, `L2_IN`, `L3_IN`
-  - `L1_OUT`, `L2_OUT`, `L3_OUT`
+- een schakeltoestel met `power_topology = 3L+N` genereert standaard:
+  - in `input_power`: `L1_IN`, `L2_IN`, `L3_IN`, `N_IN`
+  - in `output_power`: `L1_OUT`, `L2_OUT`, `L3_OUT`, `N_OUT`
+
+### Configureerbare interfacecombinaties
+
+De volgende noodzakelijke stap is dat interface-afleiding niet langer enkel
+hardcoded per template gebeurt, maar via configureerbare mappings.
+
+Daarvoor onderscheiden we:
+
+- `TypicalParameterDefinition`
+  - bijvoorbeeld `power_topology`, `spd_topology`, `wiring_type`
+- `TypicalInterfaceGroup`
+  - bijvoorbeeld `input_power`, `output_power`, `signal`
+- `TypicalInterfaceMappingRule`
+  - per parameterwaarde de interfaces die in een groep moeten ontstaan
+
+Voorbeeld:
+
+- driver parameter: `power_topology`
+- waarde `L`
+  - `input_power` -> `L_IN`
+  - `output_power` -> `L_OUT`
+- waarde `L+N`
+  - `input_power` -> `L_IN`, `N_IN`
+  - `output_power` -> `L_OUT`, `N_OUT`
+
+Dat maakt het mogelijk om:
+
+- topologies zelf te beheren
+- per equipment family andere configuratie-parameters te gebruiken
+- ook niet-symmetrische toestellen zoals voedingen en transfo's correct te modelleren
 
 ## Equipment Families
 
@@ -199,6 +240,8 @@ Hoofdscherm met deze secties:
 
 - `Algemeen`
 - `Parameters`
+- `Interface Groups`
+- `Interface Mappings`
 - `Interfaces`
 - `Validatie`
 - `Versies`
@@ -280,42 +323,51 @@ Belangrijke architectuurkeuzes:
 - geselecteerde ETIM-features kunnen omgezet worden naar `TypicalParameterDefinitions`
 - per parameterdefinitie kunnen inputtype, default, allowed values en governance-flags beheerd worden
 - parameterdefinities kunnen als herbruikbare presets opgeslagen, toegepast en verwijderd worden
-- interface-afleiding leest governed defaults, zoals poolaantal voor meerpolige schakeltoestellen
+- interfacegroepen kunnen aangemaakt, aangepast en verwijderd worden
+- interfaces kunnen aan groepen gekoppeld worden
+- interface-afleiding leest governed defaults en kent nu group-aware derived interfaces
+- voor `multi_pole_switch_device` wordt nu `power_topology` gebruikt als primaire driver
+- ondersteunde topologies voor de huidige bootstrap zijn:
+  - `L`
+  - `L+N`
+  - `3L`
+  - `3L+N`
 - validatie op parameterdefinitions is beschikbaar via een apart validatiepaneel
-- validatie controleert onder meer enums zonder waarden, niet-numerieke `managed_numeric` waarden, booleans, duplicaten en interface-drivers zonder bruikbare default
+- validatie controleert onder meer enums zonder waarden, niet-numerieke `managed_numeric` waarden, booleans, duplicaten, interface-drivers zonder bruikbare default, ongeldige group-links en ongeldige `power_topology` waarden
 - de editor waarschuwt nu bij niet-opgeslagen wijzigingen
 - lokale end-to-end flow is gevalideerd via Docker en backend API-tests
 
 ## Next Step
 
-De eerstvolgende implementatiestap is het uitwerken van een echt
-interfacepaneel met overrides, zodat de afgeleide engineeringstructuur niet
-alleen intern berekend maar ook expliciet beheerd kan worden.
+De eerstvolgende implementatiestap is het uitwerken van een configureerbare
+mappinglaag tussen parameterwaarden en interfacecombinaties.
 
 Doel van deze stap:
 
-- afgeleide interfaces zichtbaar maken voor de gebruiker
-- handmatige interface-aanpassingen mogelijk maken zonder afleiding te verliezen
-- derived en override duidelijk van elkaar onderscheiden
+- eigen lokale configuratieparameters kunnen toevoegen
+- per parameterwaarde interfacecombinaties kunnen definiëren
+- hardcoded topology- en template-afleiding stapsgewijs vervangen door beheerde mappings
 
 Concreet uit te werken:
 
-- apart interfacepaneel in de editor
-- tonen van:
+- tabel `typical_interface_mapping_rules`
+- UI-tab of grid `Interface Mappings`
+- lokale parameter toevoegen in `Parameters`
+- per mappingregel configureerbaar:
+  - driver parameter
+  - driver value
+  - interfacegroep
   - interface code
-  - rol
-  - type
-  - richting
-  - bron `derived` of `override`
-- handmatig interface toevoegen en verwijderen
-- afgeleide interfaces opnieuw genereren zonder overrides stil te verliezen
-- basisvalidatie op interfacecodes en inconsistenties
+  - role
+  - logical type
+  - direction
+- derived preview laten lezen uit mappingregels in plaats van alleen templatecode
 
 Waarom deze stap nu:
 
-- create/edit, presets en validatie werken nu lokaal
-- de belangrijkste ontbrekende engineeringoutput zit momenteel aan de interfacekant
-- dit is de logische stap van parameterbeheer naar echte equipmentmodellering
+- parameters, presets, interfacegroepen en overrides werken nu lokaal
+- de huidige `power_topology` is bewust een bootstrap en nog niet zelf beheerbaar
+- om toestellen zoals SPD, voeding en transfo correct te modelleren moet de gebruiker straks zelf configuratieopties en hun interfacegevolgen kunnen beheren
 
 ## Lokale Start
 

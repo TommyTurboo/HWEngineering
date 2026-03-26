@@ -2,6 +2,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -15,6 +16,11 @@ from app.typicals import create_typical, delete_typical, get_typical, list_typic
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     Base.metadata.create_all(bind=engine)
+    with engine.begin() as connection:
+        inspector = inspect(connection)
+        interface_columns = {column["name"] for column in inspector.get_columns("typical_interfaces")}
+        if "group_code" not in interface_columns:
+            connection.execute(text("ALTER TABLE typical_interfaces ADD COLUMN group_code VARCHAR(100)"))
     yield
 
 app = FastAPI(
