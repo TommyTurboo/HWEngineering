@@ -125,6 +125,77 @@ class TypicalParameterDefinitionRead(BaseModel):
         return []
 
 
+class ParameterDefinitionPresetCreate(BaseModel):
+    preset_name: str
+    description: str | None = None
+    code: str
+    name: str
+    source: str
+    input_type: str
+    unit: str | None = None
+    default_value: str | None = None
+    allowed_values: list[str] = Field(default_factory=list)
+    required: bool = False
+    is_parametrizable: bool = True
+    drives_interfaces: bool = False
+    sort_order: int = 0
+
+
+class ParameterDefinitionPresetUpdate(ParameterDefinitionPresetCreate):
+    pass
+
+
+class ParameterDefinitionPresetRead(BaseModel):
+    id: str
+    preset_name: str
+    description: str | None = None
+    code: str
+    name: str
+    source: str
+    input_type: str
+    unit: str | None = None
+    default_value: str | None = None
+    allowed_values: list[str] = Field(default_factory=list)
+    required: int
+    is_parametrizable: int
+    drives_interfaces: int
+    sort_order: int
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+    @field_validator("allowed_values", mode="before")
+    @classmethod
+    def parse_preset_allowed_values(cls, value: object) -> list[str]:
+        if value is None or value == "":
+            return []
+        if isinstance(value, list):
+            return [str(item) for item in value]
+        if isinstance(value, str):
+            try:
+                parsed = json.loads(value)
+            except json.JSONDecodeError:
+                return [item.strip() for item in value.split(",") if item.strip()]
+            if isinstance(parsed, list):
+                return [str(item) for item in parsed]
+        return []
+
+
+class ValidationIssue(BaseModel):
+    severity: str
+    code: str
+    message: str
+    parameter_code: str | None = None
+    parameter_name: str | None = None
+
+
+class TypicalValidationResult(BaseModel):
+    valid: bool
+    issues: list[ValidationIssue] = Field(default_factory=list)
+
+
 class EquipmentTypicalCreate(BaseModel):
     name: str
     code: str

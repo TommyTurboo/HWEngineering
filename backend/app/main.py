@@ -7,8 +7,9 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.database import Base, engine, get_db
 from app.etim_repository import get_class_detail, list_classes
-from app.schemas import EquipmentTypicalCreate, EquipmentTypicalListItem, EquipmentTypicalRead, EquipmentTypicalUpdate, EtimClassDetail, EtimClassSummary
-from app.typicals import create_typical, delete_typical, get_typical, list_typicals, update_typical
+from app.presets import create_preset, delete_preset, list_presets, update_preset
+from app.schemas import EquipmentTypicalCreate, EquipmentTypicalListItem, EquipmentTypicalRead, EquipmentTypicalUpdate, EtimClassDetail, EtimClassSummary, ParameterDefinitionPresetCreate, ParameterDefinitionPresetRead, ParameterDefinitionPresetUpdate, TypicalValidationResult
+from app.typicals import create_typical, delete_typical, get_typical, list_typicals, update_typical, validate_typical_payload
 
 
 @asynccontextmanager
@@ -65,6 +66,35 @@ def typicals(db: Session = Depends(get_db)) -> list[EquipmentTypicalListItem]:
     return list_typicals(db)
 
 
+@app.get("/api/v1/presets", response_model=list[ParameterDefinitionPresetRead])
+def presets(code: str | None = None, db: Session = Depends(get_db)) -> list[ParameterDefinitionPresetRead]:
+    return list_presets(db, code=code.lower() if code else None)
+
+
+@app.post("/api/v1/presets", response_model=ParameterDefinitionPresetRead, status_code=201)
+def presets_create(
+    payload: ParameterDefinitionPresetCreate, db: Session = Depends(get_db)
+) -> ParameterDefinitionPresetRead:
+    return create_preset(db, payload)
+
+
+@app.put("/api/v1/presets/{preset_id}", response_model=ParameterDefinitionPresetRead)
+def preset_update(
+    preset_id: str, payload: ParameterDefinitionPresetUpdate, db: Session = Depends(get_db)
+) -> ParameterDefinitionPresetRead:
+    result = update_preset(db, preset_id, payload)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Preset not found")
+    return result
+
+
+@app.delete("/api/v1/presets/{preset_id}", status_code=204)
+def preset_delete(preset_id: str, db: Session = Depends(get_db)) -> None:
+    deleted = delete_preset(db, preset_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Preset not found")
+
+
 @app.post("/api/v1/typicals", response_model=EquipmentTypicalRead, status_code=201)
 def typicals_create(payload: EquipmentTypicalCreate, db: Session = Depends(get_db)) -> EquipmentTypicalRead:
     try:
@@ -93,6 +123,11 @@ def typical_update(
     if result is None:
         raise HTTPException(status_code=404, detail="Typical not found")
     return result
+
+
+@app.post("/api/v1/typicals/validate", response_model=TypicalValidationResult)
+def typical_validate(payload: EquipmentTypicalCreate) -> TypicalValidationResult:
+    return validate_typical_payload(payload)
 
 
 @app.delete("/api/v1/typicals/{typical_id}", status_code=204)

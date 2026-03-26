@@ -102,6 +102,36 @@ type EquipmentTypicalDetail = EquipmentTypical & {
   }[];
 };
 
+type ParameterDefinitionPreset = {
+  id: string;
+  preset_name: string;
+  description?: string | null;
+  code: string;
+  name: string;
+  source: string;
+  input_type: string;
+  unit: string | null;
+  default_value: string | null;
+  allowed_values: string[];
+  required: number;
+  is_parametrizable: number;
+  drives_interfaces: number;
+  sort_order: number;
+};
+
+type ValidationIssue = {
+  severity: string;
+  code: string;
+  message: string;
+  parameter_code?: string | null;
+  parameter_name?: string | null;
+};
+
+type TypicalValidationResult = {
+  valid: boolean;
+  issues: ValidationIssue[];
+};
+
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
 
 function slugify(value: string): string {
@@ -296,7 +326,11 @@ export default function App() {
   const [typicalCode, setTypicalCode] = useState("");
   const [typicalDescription, setTypicalDescription] = useState("");
   const [definitions, setDefinitions] = useState<GovernedParameterDefinition[]>([]);
+  const [presets, setPresets] = useState<ParameterDefinitionPreset[]>([]);
+  const [presetSelection, setPresetSelection] = useState<Record<string, string>>({});
+  const [validation, setValidation] = useState<TypicalValidationResult | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [validating, setValidating] = useState(false);
   const [loadingTypical, setLoadingTypical] = useState(false);
   const [savedSnapshot, setSavedSnapshot] = useState("");
 
@@ -339,7 +373,7 @@ export default function App() {
   useEffect(() => {
     async function loadInitialData() {
       try {
-        const [healthResponse, classesResponse, typicalsResponse] = await Promise.all([
+        const [healthResponse, classesResponse, typicalsResponse, presetsResponse] = await Promise.all([
           fetch(`${apiBaseUrl}/health`),
           fetch(
             `${apiBaseUrl}/api/v1/etim/classes?search=${encodeURIComponent(
@@ -347,9 +381,10 @@ export default function App() {
             )}&limit=8`,
           ),
           fetch(`${apiBaseUrl}/api/v1/typicals`),
+          fetch(`${apiBaseUrl}/api/v1/presets`),
         ]);
 
-        if (!healthResponse.ok || !classesResponse.ok || !typicalsResponse.ok) {
+        if (!healthResponse.ok || !classesResponse.ok || !typicalsResponse.ok || !presetsResponse.ok) {
           throw new Error("API bootstrap failed");
         }
 
@@ -357,6 +392,7 @@ export default function App() {
         const classesPayload = (await classesResponse.json()) as EtimClassSummary[];
         setClasses(classesPayload);
         setTypicals((await typicalsResponse.json()) as EquipmentTypical[]);
+        setPresets((await presetsResponse.json()) as ParameterDefinitionPreset[]);
         if (classesPayload.length > 0) {
           setSelectedClassId(classesPayload[0].id);
         }
@@ -457,6 +493,101 @@ export default function App() {
     }
   }
 
+  async function refreshPresets() {
+    const response = await fetch(`${apiBaseUrl}/api/v1/presets`);
+    if (!response.ok) {
+      throw new Error("Presets laden mislukt");
+    }
+    setPresets((await response.json()) as ParameterDefinitionPreset[]);
+  }
+
+  async function handleSavePreset(definition: GovernedParameterDefinition) {
+    const presetName = window.prompt(
+      `Presetnaam voor ${definition.name}`,
+      `${definition.name} preset`,
+    );
+    if (!presetName || presetName.trim() === "") {
+      return;
+    }
+
+    setError(null);
+    const response = await fetch(`${apiBaseUrl}/api/v1/presets`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        preset_name: presetName.trim(),
+        description: `Preset voor ${definition.name}`,
+        code: definition.code,
+        name: definition.name,
+        source: definition.source,
+        input_type: definition.input_type,
+        unit: definition.unit,
+        default_value: definition.default_value || null,
+        allowed_values: definition.allowed_values,
+        required: definition.required,
+        is_parametrizable: definition.is_parametrizable,
+        drives_interfaces: definition.drives_interfaces,
+        sort_order: definition.sort_order,
+      }),
+    });
+
+    if (!response.ok) {
+      setError("Preset opslaan mislukt");
+      return;
+    }
+
+    await refreshPresets();
+  }
+
+  function applyPresetToDefinition(featureKey: string, presetId: string) {
+    const preset = presets.find((item) => item.id === presetId);
+    if (!preset) {
+      return;
+    }
+
+    updateDefinition(featureKey, {
+      code: preset.code,
+      name: preset.name,
+      source: preset.source,
+      input_type: preset.input_type,
+      unit: preset.unit,
+      default_value: preset.default_value ?? "",
+      allowed_values: preset.allowed_values,
+      allowed_values_text: preset.allowed_values.join(", "),
+      required: preset.required === 1,
+      is_parametrizable: preset.is_parametrizable === 1,
+      drives_interfaces: preset.drives_interfaces === 1,
+      sort_order: preset.sort_order,
+    });
+  }
+
+  async function handleDeletePreset(presetId: string) {
+    const confirmed = window.confirm("Wil je deze preset verwijderen?");
+    if (!confirmed) {
+      return;
+    }
+
+    setError(null);
+    const response = await fetch(`${apiBaseUrl}/api/v1/presets/${presetId}`, {
+      method: "DELETE",
+    });
+    if (!response.ok) {
+      setError("Preset verwijderen mislukt");
+      return;
+    }
+
+    setPresetSelection((current) => {
+      const next = { ...current };
+      for (const [key, value] of Object.entries(next)) {
+        if (value === presetId) {
+          next[key] = "";
+        }
+      }
+      return next;
+    });
+    await refreshPresets();
+  }
+
   async function handleSearch(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!confirmDiscardChanges()) {
@@ -548,6 +679,38 @@ export default function App() {
       setError(err instanceof Error ? err.message : "Unknown error");
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  async function handleValidateTypical() {
+    if (!selectedClassId || !selectedClass) {
+      setError("De geselecteerde ETIM-klasse is niet geladen.");
+      return;
+    }
+
+    const payload = buildPayload();
+    if (!payload) {
+      return;
+    }
+
+    setValidating(true);
+    setError(null);
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/v1/typicals/validate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      if (!response.ok) {
+        throw new Error("Validatie mislukt");
+      }
+
+      setValidation((await response.json()) as TypicalValidationResult);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unknown error");
+    } finally {
+      setValidating(false);
     }
   }
 
@@ -807,6 +970,7 @@ export default function App() {
                 </p>
                 {isDirty ? <p className="dirty-message">Niet-opgeslagen wijzigingen</p> : null}
                 {error ? <p className="error-message">{error}</p> : null}
+                <div className="editor-actions">
                 <button disabled={!selectedClassId || submitting} onClick={handleSaveTypical} type="button">
                   {submitting
                     ? mode === "edit"
@@ -816,6 +980,15 @@ export default function App() {
                       ? "Sla wijzigingen op"
                       : "Maak Equipment Typical"}
                 </button>
+                <button
+                  className="secondary-button"
+                  disabled={!selectedClassId || validating}
+                  onClick={handleValidateTypical}
+                  type="button"
+                >
+                  {validating ? "Valideren..." : "Valideer"}
+                </button>
+                </div>
               </div>
             </div>
 
@@ -903,7 +1076,11 @@ export default function App() {
                 {definitions
                   .slice()
                   .sort((left, right) => left.sort_order - right.sort_order)
-                  .map((definition) => (
+                  .map((definition) => {
+                    const matchingPresets = presets.filter((preset) => preset.code === definition.code);
+                    const selectedPresetId = presetSelection[definition.feature_key] ?? "";
+
+                    return (
                     <article className="definition-card" key={definition.feature_key}>
                       <div className="definition-head">
                         <strong>{definition.name}</strong>
@@ -1016,8 +1193,87 @@ export default function App() {
                           <span>Stuurt interfaces</span>
                         </label>
                       </div>
+
+                      <div className="preset-row">
+                        <label className="field preset-select">
+                          <span>Preset</span>
+                          <select
+                            value={selectedPresetId}
+                            onChange={(event) =>
+                              setPresetSelection((current) => ({
+                                ...current,
+                                [definition.feature_key]: event.target.value,
+                              }))
+                            }
+                          >
+                            <option value="">Geen preset geselecteerd</option>
+                            {matchingPresets.map((preset) => (
+                              <option key={preset.id} value={preset.id}>
+                                {preset.preset_name}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <button
+                          className="secondary-button"
+                          disabled={!selectedPresetId}
+                          onClick={() => applyPresetToDefinition(definition.feature_key, selectedPresetId)}
+                          type="button"
+                        >
+                          Pas preset toe
+                        </button>
+                        <button
+                          className="secondary-button"
+                          onClick={() => handleSavePreset(definition)}
+                          type="button"
+                        >
+                          Sla op als preset
+                        </button>
+                        <button
+                          className="delete-button"
+                          disabled={!selectedPresetId}
+                          onClick={() => handleDeletePreset(selectedPresetId)}
+                          type="button"
+                        >
+                          Verwijder preset
+                        </button>
+                      </div>
                     </article>
-                  ))}
+                  )})}
+              </div>
+            )}
+          </div>
+
+          <div className="validation-panel">
+            <div className="editor-header">
+              <h3>Validatie</h3>
+              {validation ? (
+                <small className={validation.valid ? "validation-ok" : "validation-bad"}>
+                  {validation.valid ? "Geen errors" : "Issues gevonden"}
+                </small>
+              ) : null}
+            </div>
+            {!validation ? (
+              <p className="empty-state">Nog geen validatie uitgevoerd.</p>
+            ) : validation.issues.length === 0 ? (
+              <p className="validation-success">Geen validatieproblemen gevonden.</p>
+            ) : (
+              <div className="validation-list">
+                {validation.issues.map((issue, index) => (
+                  <article
+                    className={issue.severity === "error" ? "validation-item error" : "validation-item warning"}
+                    key={`${issue.code}-${index}`}
+                  >
+                    <strong>{issue.severity === "error" ? "Error" : "Warning"}</strong>
+                    <p>{issue.message}</p>
+                    {issue.parameter_name || issue.parameter_code ? (
+                      <small>
+                        {(issue.parameter_name ?? issue.parameter_code) || ""}
+                        {issue.parameter_name && issue.parameter_code ? ` · ${issue.parameter_code}` : ""}
+                      </small>
+                    ) : null}
+                  </article>
+                ))}
               </div>
             )}
           </div>

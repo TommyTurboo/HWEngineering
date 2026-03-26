@@ -35,6 +35,29 @@ class EquipmentTypical(Base):
     )
 
 
+class ParameterDefinitionPreset(Base):
+    __tablename__ = "parameter_definition_presets"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    preset_name: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    code: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    source: Mapped[str] = mapped_column(String(30), nullable=False)
+    input_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    unit: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    default_value: Mapped[str | None] = mapped_column(Text, nullable=True)
+    allowed_values: Mapped[str | None] = mapped_column(Text, nullable=True)
+    required: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    is_parametrizable: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    drives_interfaces: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+    )
+
+
 class TypicalParameterDefinition(Base):
     __tablename__ = "typical_parameter_definitions"
 

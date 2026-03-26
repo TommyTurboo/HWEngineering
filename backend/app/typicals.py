@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.etim_repository import get_class_detail
 from app.models import EquipmentTypical, TypicalInterface, TypicalParameter, TypicalParameterDefinition
-from app.schemas import EquipmentTypicalCreate, EquipmentTypicalUpdate
+from app.schemas import EquipmentTypicalCreate, EquipmentTypicalUpdate, TypicalValidationResult, ValidationIssue
 
 
 def derive_interfaces(payload: EquipmentTypicalCreate) -> list[TypicalInterface]:
@@ -92,6 +92,200 @@ def derive_interfaces(payload: EquipmentTypicalCreate) -> list[TypicalInterface]
         )
 
     return interfaces
+
+
+def validate_typical_payload(payload: EquipmentTypicalCreate) -> TypicalValidationResult:
+    issues: list[ValidationIssue] = []
+    definitions = payload.parameter_definitions
+
+    if not payload.name.strip():
+        issues.append(
+            ValidationIssue(
+                severity="error",
+                code="missing_typical_name",
+                message="Typical naam ontbreekt.",
+            )
+        )
+
+    if not payload.code.strip():
+        issues.append(
+            ValidationIssue(
+                severity="error",
+                code="missing_typical_code",
+                message="Typical code ontbreekt.",
+            )
+        )
+
+    if not payload.etim_class_id.strip():
+        issues.append(
+            ValidationIssue(
+                severity="error",
+                code="missing_etim_class",
+                message="ETIM-klasse ontbreekt.",
+            )
+        )
+
+    driver_definitions = [definition for definition in definitions if definition.drives_interfaces]
+    if len(driver_definitions) > 1:
+        issues.append(
+            ValidationIssue(
+                severity="warning",
+                code="multiple_interface_drivers",
+                message="Meerdere parameterdefinities staan als interface-driver gemarkeerd.",
+            )
+        )
+
+    seen_codes: set[str] = set()
+    for definition in definitions:
+        normalized_code = definition.code.strip().lower()
+        allowed_values = [value.strip() for value in definition.allowed_values if value.strip()]
+        default_value = (definition.default_value or "").strip()
+        normalized_allowed_values = [value.casefold() for value in allowed_values]
+
+        if not normalized_code:
+            issues.append(
+                ValidationIssue(
+                    severity="error",
+                    code="missing_parameter_code",
+                    message="Parametercode ontbreekt.",
+                    parameter_code=definition.code,
+                    parameter_name=definition.name,
+                )
+            )
+            continue
+
+        if normalized_code in seen_codes:
+            issues.append(
+                ValidationIssue(
+                    severity="error",
+                    code="duplicate_parameter_code",
+                    message=f"Parametercode '{definition.code}' komt meer dan eens voor.",
+                    parameter_code=definition.code,
+                    parameter_name=definition.name,
+                )
+            )
+        seen_codes.add(normalized_code)
+
+        if len(normalized_allowed_values) != len(set(normalized_allowed_values)):
+            issues.append(
+                ValidationIssue(
+                    severity="error",
+                    code="duplicate_allowed_values",
+                    message="Allowed values bevat dubbele waarden.",
+                    parameter_code=definition.code,
+                    parameter_name=definition.name,
+                )
+            )
+
+        if definition.input_type == "enum" and not allowed_values:
+            issues.append(
+                ValidationIssue(
+                    severity="error",
+                    code="enum_without_values",
+                    message="Enum-parameter heeft geen allowed values.",
+                    parameter_code=definition.code,
+                    parameter_name=definition.name,
+                )
+            )
+
+        if definition.input_type == "boolean":
+            if allowed_values and set(normalized_allowed_values) != {"true", "false"}:
+                issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        code="boolean_with_custom_values",
+                        message="Boolean-parameter moet allowed values 'true, false' gebruiken.",
+                        parameter_code=definition.code,
+                        parameter_name=definition.name,
+                    )
+                )
+            if default_value and default_value.casefold() not in {"true", "false"}:
+                issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        code="boolean_default_not_boolean",
+                        message="Boolean-parameter heeft een niet-booleaanse defaultwaarde.",
+                        parameter_code=definition.code,
+                        parameter_name=definition.name,
+                    )
+                )
+
+        if definition.input_type == "managed_numeric":
+            if default_value:
+                try:
+                    float(default_value.replace(",", "."))
+                except ValueError:
+                    issues.append(
+                        ValidationIssue(
+                            severity="error",
+                            code="managed_numeric_default_not_numeric",
+                            message=f"Defaultwaarde '{default_value}' is niet numeriek.",
+                            parameter_code=definition.code,
+                            parameter_name=definition.name,
+                        )
+                    )
+            for value in allowed_values:
+                try:
+                    float(value.replace(",", "."))
+                except ValueError:
+                    issues.append(
+                        ValidationIssue(
+                            severity="error",
+                            code="managed_numeric_allowed_value_not_numeric",
+                            message=f"Allowed value '{value}' is niet numeriek.",
+                            parameter_code=definition.code,
+                            parameter_name=definition.name,
+                        )
+                    )
+
+        if default_value and allowed_values and default_value not in allowed_values:
+            issues.append(
+                ValidationIssue(
+                    severity="error",
+                    code="default_not_in_allowed_values",
+                    message=f"Defaultwaarde '{default_value}' zit niet in allowed values.",
+                    parameter_code=definition.code,
+                    parameter_name=definition.name,
+                )
+            )
+
+        if definition.required and not default_value:
+            issues.append(
+                ValidationIssue(
+                    severity="warning",
+                    code="required_without_default",
+                    message="Required parameter heeft geen defaultwaarde.",
+                    parameter_code=definition.code,
+                    parameter_name=definition.name,
+                )
+            )
+
+        if definition.drives_interfaces and not default_value:
+            issues.append(
+                ValidationIssue(
+                    severity="warning",
+                    code="interface_driver_without_default",
+                    message="Interface-driver heeft geen defaultwaarde; interface-afleiding is dan onzeker.",
+                    parameter_code=definition.code,
+                    parameter_name=definition.name,
+                )
+            )
+
+        if definition.drives_interfaces and definition.input_type == "enum" and not allowed_values:
+            issues.append(
+                ValidationIssue(
+                    severity="error",
+                    code="interface_driver_without_allowed_values",
+                    message="Enum interface-driver heeft geen allowed values.",
+                    parameter_code=definition.code,
+                    parameter_name=definition.name,
+                )
+            )
+
+    return TypicalValidationResult(
+        valid=not any(issue.severity == "error" for issue in issues),
+        issues=issues,
+    )
 
 
 def _build_parameter_definitions(payload: EquipmentTypicalCreate) -> list[TypicalParameterDefinition]:

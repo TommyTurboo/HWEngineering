@@ -279,38 +279,43 @@ Belangrijke architectuurkeuzes:
 - typicals kunnen aangemaakt, bewerkt en verwijderd worden
 - geselecteerde ETIM-features kunnen omgezet worden naar `TypicalParameterDefinitions`
 - per parameterdefinitie kunnen inputtype, default, allowed values en governance-flags beheerd worden
+- parameterdefinities kunnen als herbruikbare presets opgeslagen, toegepast en verwijderd worden
 - interface-afleiding leest governed defaults, zoals poolaantal voor meerpolige schakeltoestellen
+- validatie op parameterdefinitions is beschikbaar via een apart validatiepaneel
+- validatie controleert onder meer enums zonder waarden, niet-numerieke `managed_numeric` waarden, booleans, duplicaten en interface-drivers zonder bruikbare default
 - de editor waarschuwt nu bij niet-opgeslagen wijzigingen
 - lokale end-to-end flow is gevalideerd via Docker en backend API-tests
 
 ## Next Step
 
-De eerstvolgende implementatiestap is het toevoegen van een herbruikbare
-governance-laag bovenop de typical-editor, zodat dezelfde featuredefinities niet
-telkens opnieuw per typical opgebouwd moeten worden.
+De eerstvolgende implementatiestap is het uitwerken van een echt
+interfacepaneel met overrides, zodat de afgeleide engineeringstructuur niet
+alleen intern berekend maar ook expliciet beheerd kan worden.
 
 Doel van deze stap:
 
-- controlled waarden niet alleen lokaal in één typical beheren
-- maar ook herbruikbaar maken via presets of governance-profielen
-- zodat meerdere componenten bewust dezelfde definities kunnen delen zonder impliciete koppeling
+- afgeleide interfaces zichtbaar maken voor de gebruiker
+- handmatige interface-aanpassingen mogelijk maken zonder afleiding te verliezen
+- derived en override duidelijk van elkaar onderscheiden
 
 Concreet uit te werken:
 
-- `ParameterDefinitionPreset` of vergelijkbaar bibliotheekobject
-- UI om een preset aan te maken, te beheren en toe te passen
-- onderscheid tussen:
-  - local override op één typical
-  - herbruikbare preset voor meerdere typicals
-- expliciete koppeling tussen typical-definition en preset-versie
-- later validatie op inconsistenties tussen preset en local override
+- apart interfacepaneel in de editor
+- tonen van:
+  - interface code
+  - rol
+  - type
+  - richting
+  - bron `derived` of `override`
+- handmatig interface toevoegen en verwijderen
+- afgeleide interfaces opnieuw genereren zonder overrides stil te verliezen
+- basisvalidatie op interfacecodes en inconsistenties
 
 Waarom deze stap nu:
 
-- create/edit en governed parameters werken nu lokaal
-- waarden worden vandaag nog per typical beheerd
-- zonder presets moet dezelfde governance te vaak manueel herhaald worden
-- dit is de logische stap om van een werkende editor naar een echte bibliotheek te gaan
+- create/edit, presets en validatie werken nu lokaal
+- de belangrijkste ontbrekende engineeringoutput zit momenteel aan de interfacekant
+- dit is de logische stap van parameterbeheer naar echte equipmentmodellering
 
 ## Lokale Start
 

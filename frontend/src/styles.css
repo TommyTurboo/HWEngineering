@@ -188,6 +188,12 @@ h1 {
   font-size: 0.92rem;
 }
 
+.editor-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
 .dirty-message {
   margin: 0 0 12px;
   padding: 10px 12px;
@@ -294,6 +300,45 @@ h1 {
   background: #ffffff;
 }
 
+.validation-panel {
+  margin-bottom: 20px;
+  padding: 16px;
+  border: 1px solid rgba(23, 32, 42, 0.08);
+  border-radius: 16px;
+  background: #ffffff;
+}
+
+.validation-list {
+  display: grid;
+  gap: 10px;
+}
+
+.validation-item {
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(23, 32, 42, 0.08);
+}
+
+.validation-item p {
+  margin: 6px 0;
+}
+
+.validation-item.error {
+  background: #fff1f1;
+  border-color: rgba(148, 29, 29, 0.2);
+}
+
+.validation-item.warning {
+  background: #fff8e9;
+  border-color: rgba(180, 122, 18, 0.24);
+}
+
+.validation-success,
+.validation-ok,
+.validation-bad {
+  color: #536471;
+}
+
 .definition-list {
   display: grid;
   gap: 14px;
@@ -334,4 +379,17 @@ h1 {
   align-items: center;
   gap: 8px;
   color: #17202a;
+}
+
+.preset-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 14px;
+  align-items: end;
+}
+
+.preset-select {
+  min-width: 240px;
+  margin-bottom: 0;
 }
