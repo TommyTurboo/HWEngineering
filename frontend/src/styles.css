@@ -21,15 +21,14 @@ body {
 }
 
 .app-shell {
-  display: grid;
-  place-items: center;
   min-height: 100vh;
-  padding: 24px;
+  padding: 18px 24px 32px;
 }
 
 .hero-card {
-  width: min(900px, 100%);
-  padding: 32px;
+  width: min(1680px, calc(100vw - 48px));
+  margin: 0 auto;
+  padding: 24px 28px 28px;
   border: 1px solid rgba(23, 32, 42, 0.08);
   border-radius: 24px;
   background: rgba(255, 255, 255, 0.82);
@@ -186,6 +185,25 @@ h1 {
   background: #fff1f1;
   color: #941d1d;
   font-size: 0.92rem;
+}
+
+.success-message {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border: 1px solid rgba(18, 112, 87, 0.18);
+  border-radius: 10px;
+  background: #eefaf5;
+  color: #127057;
+  font-size: 0.92rem;
+}
+
+.read-only-panel {
+  opacity: 0.68;
+  pointer-events: none;
+}
+
+.read-only-panel .data-grid-shell {
+  filter: grayscale(0.08);
 }
 
 .editor-actions {
@@ -352,9 +370,173 @@ h1 {
   gap: 14px;
 }
 
+.data-grid-shell {
+  width: 100%;
+  min-height: 320px;
+  margin-top: 8px;
+}
+
+.data-grid-shell-wide {
+  min-height: 360px;
+}
+
+.grid-input {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid #c6d0db;
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 0.93rem;
+  line-height: 1.2;
+  background: white;
+  color: #17202a;
+}
+
+.grid-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(120px, 1fr));
+  gap: 6px;
+  align-items: stretch;
+  width: 100%;
+}
+
+.grid-actions > * {
+  min-width: 0;
+}
+
+.grid-actions-stack {
+  grid-template-columns: 1fr;
+}
+
+.data-grid-shell .MuiDataGrid-cell {
+  align-items: center;
+  padding: 8px 10px;
+  border-bottom: 1px solid #edf1f5;
+}
+
+.data-grid-shell .MuiDataGrid-columnHeaders {
+  background: #f7f9fa;
+  border-bottom: 1px solid #d9e1e8;
+}
+
+.data-grid-shell .MuiDataGrid-columnHeaderTitle {
+  font-weight: 700;
+  color: #32424f;
+}
+
+.data-grid-shell .MuiDataGrid-main {
+  background: #ffffff;
+}
+
+.data-grid-shell .MuiDataGrid-root {
+  border: 1px solid #d9e1e8;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.data-grid-shell .MuiDataGrid-row:hover {
+  background: #fafcfd;
+}
+
+.data-grid-shell .secondary-button,
+.data-grid-shell .delete-button,
+.data-grid-shell button:not(.secondary-button):not(.delete-button) {
+  width: 100%;
+  min-height: 34px;
+  padding: 7px 10px;
+  font-size: 0.86rem;
+  line-height: 1.1;
+  white-space: nowrap;
+}
+
+.data-grid-shell .delete-button,
+.data-grid-shell .secondary-button {
+  margin: 0;
+  align-self: stretch;
+}
+
+.data-grid-shell .MuiDataGrid-cell:focus,
+.data-grid-shell .MuiDataGrid-cell:focus-within,
+.data-grid-shell .MuiDataGrid-columnHeader:focus,
+.data-grid-shell .MuiDataGrid-columnHeader:focus-within {
+  outline: none;
+}
+
+.compact-table {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+
+.table-header,
+.table-row {
+  display: grid;
+  gap: 8px;
+  align-items: center;
+}
+
+.table-header {
+  padding: 0 8px;
+  color: #536471;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.table-row {
+  padding: 8px;
+  border: 1px solid rgba(23, 32, 42, 0.08);
+  border-radius: 10px;
+  background: #fbfcfc;
+}
+
+.parameter-grid {
+  grid-template-columns: 1.3fr 1fr 0.9fr 1fr 1.6fr 72px 72px 72px 280px;
+}
+
+.mapping-grid {
+  grid-template-columns: 1.2fr 1fr 1fr 1fr 1fr 0.9fr 0.9fr 110px;
+}
+
+.table-row input,
+.table-row select {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid rgba(23, 32, 42, 0.16);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font: inherit;
+  background: white;
+}
+
+.checkbox-cell {
+  display: grid;
+  place-items: center;
+}
+
+.checkbox-cell input {
+  width: 16px;
+  height: 16px;
+}
+
+.row-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.row-actions select {
+  min-width: 0;
+}
+
 .interface-list {
   display: grid;
   gap: 14px;
+}
+
+.mapping-list {
+  display: grid;
+  gap: 14px;
+  margin-bottom: 14px;
 }
 
 .group-list {
@@ -371,6 +553,13 @@ h1 {
 }
 
 .group-card {
+  padding: 14px;
+  border: 1px solid rgba(23, 32, 42, 0.08);
+  border-radius: 14px;
+  background: #fbfcfc;
+}
+
+.mapping-card {
   padding: 14px;
   border: 1px solid rgba(23, 32, 42, 0.08);
   border-radius: 14px;
@@ -425,4 +614,20 @@ h1 {
 .preset-select {
   min-width: 240px;
   margin-bottom: 0;
+}
+
+@media (max-width: 1200px) {
+  .hero-card {
+    width: calc(100vw - 24px);
+    padding: 18px;
+  }
+
+  .parameter-grid,
+  .mapping-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .table-header {
+    display: none;
+  }
 }

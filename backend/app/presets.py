@@ -22,6 +22,10 @@ def _to_model(payload: ParameterDefinitionPresetCreate) -> ParameterDefinitionPr
         is_parametrizable=1 if payload.is_parametrizable else 0,
         drives_interfaces=1 if payload.drives_interfaces else 0,
         sort_order=payload.sort_order,
+        interface_groups_json=json.dumps([group.model_dump() for group in payload.interface_groups]),
+        interface_mapping_rules_json=json.dumps(
+            [rule.model_dump() for rule in payload.interface_mapping_rules]
+        ),
     )
 
 
@@ -65,6 +69,10 @@ def update_preset(
     preset.is_parametrizable = 1 if payload.is_parametrizable else 0
     preset.drives_interfaces = 1 if payload.drives_interfaces else 0
     preset.sort_order = payload.sort_order
+    preset.interface_groups_json = json.dumps([group.model_dump() for group in payload.interface_groups])
+    preset.interface_mapping_rules_json = json.dumps(
+        [rule.model_dump() for rule in payload.interface_mapping_rules]
+    )
 
     db.commit()
     db.refresh(preset)

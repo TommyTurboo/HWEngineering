@@ -1,3 +1,4 @@
+import json
 from datetime import datetime
 from uuid import uuid4
 
@@ -17,6 +18,8 @@ class EquipmentTypical(Base):
     etim_class_id: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
     etim_class_description: Mapped[str] = mapped_column(String(255), nullable=False)
     template_key: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    lineage_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    released_from_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     status: Mapped[str] = mapped_column(String(20), default="draft", nullable=False)
     version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
@@ -31,6 +34,9 @@ class EquipmentTypical(Base):
         back_populates="typical", cascade="all, delete-orphan"
     )
     interface_groups: Mapped[list["TypicalInterfaceGroup"]] = relationship(
+        back_populates="typical", cascade="all, delete-orphan"
+    )
+    interface_mapping_rules: Mapped[list["TypicalInterfaceMappingRule"]] = relationship(
         back_populates="typical", cascade="all, delete-orphan"
     )
     interfaces: Mapped[list["TypicalInterface"]] = relationship(
@@ -55,10 +61,32 @@ class ParameterDefinitionPreset(Base):
     is_parametrizable: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     drives_interfaces: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    interface_groups_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    interface_mapping_rules_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
     )
+
+    @property
+    def interface_groups(self) -> list[dict]:
+        if not self.interface_groups_json:
+            return []
+        try:
+            parsed = json.loads(self.interface_groups_json)
+        except json.JSONDecodeError:
+            return []
+        return parsed if isinstance(parsed, list) else []
+
+    @property
+    def interface_mapping_rules(self) -> list[dict]:
+        if not self.interface_mapping_rules_json:
+            return []
+        try:
+            parsed = json.loads(self.interface_mapping_rules_json)
+        except json.JSONDecodeError:
+            return []
+        return parsed if isinstance(parsed, list) else []
 
 
 class TypicalParameterDefinition(Base):
@@ -78,6 +106,7 @@ class TypicalParameterDefinition(Base):
     required: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     is_parametrizable: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     drives_interfaces: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    bundle_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
     typical: Mapped[EquipmentTypical] = relationship(back_populates="parameter_definitions")
@@ -134,6 +163,28 @@ class TypicalInterfaceGroup(Base):
     category: Mapped[str] = mapped_column(String(100), nullable=False)
     side: Mapped[str | None] = mapped_column(String(100), nullable=True)
     source: Mapped[str] = mapped_column(String(30), default="profile", nullable=False)
+    bundle_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
     typical: Mapped[EquipmentTypical] = relationship(back_populates="interface_groups")
+
+
+class TypicalInterfaceMappingRule(Base):
+    __tablename__ = "typical_interface_mapping_rules"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    typical_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("equipment_typicals.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    driver_parameter_code: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    driver_value: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    group_code: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
+    interface_code: Mapped[str] = mapped_column(String(100), nullable=False)
+    role: Mapped[str] = mapped_column(String(100), nullable=False)
+    logical_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    direction: Mapped[str] = mapped_column(String(20), nullable=False)
+    source: Mapped[str] = mapped_column(String(30), default="rule", nullable=False)
+    bundle_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+    typical: Mapped[EquipmentTypical] = relationship(back_populates="interface_mapping_rules")

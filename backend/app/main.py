@@ -10,7 +10,7 @@ from app.database import Base, engine, get_db
 from app.etim_repository import get_class_detail, list_classes
 from app.presets import create_preset, delete_preset, list_presets, update_preset
 from app.schemas import EquipmentTypicalCreate, EquipmentTypicalListItem, EquipmentTypicalRead, EquipmentTypicalUpdate, EtimClassDetail, EtimClassSummary, ParameterDefinitionPresetCreate, ParameterDefinitionPresetRead, ParameterDefinitionPresetUpdate, TypicalValidationResult
-from app.typicals import create_typical, delete_typical, get_typical, list_typicals, update_typical, validate_typical_payload
+from app.typicals import create_draft_from_released, create_typical, delete_typical, get_typical, list_typical_versions, list_typicals, release_typical, update_typical, validate_typical_payload
 
 
 @asynccontextmanager
@@ -18,9 +18,41 @@ async def lifespan(_: FastAPI):
     Base.metadata.create_all(bind=engine)
     with engine.begin() as connection:
         inspector = inspect(connection)
+        preset_columns = {column["name"] for column in inspector.get_columns("parameter_definition_presets")}
+        if "interface_groups_json" not in preset_columns:
+            connection.execute(
+                text("ALTER TABLE parameter_definition_presets ADD COLUMN interface_groups_json TEXT")
+            )
+        if "interface_mapping_rules_json" not in preset_columns:
+            connection.execute(
+                text("ALTER TABLE parameter_definition_presets ADD COLUMN interface_mapping_rules_json TEXT")
+            )
         interface_columns = {column["name"] for column in inspector.get_columns("typical_interfaces")}
         if "group_code" not in interface_columns:
             connection.execute(text("ALTER TABLE typical_interfaces ADD COLUMN group_code VARCHAR(100)"))
+        parameter_definition_columns = {
+            column["name"] for column in inspector.get_columns("typical_parameter_definitions")
+        }
+        if "bundle_id" not in parameter_definition_columns:
+            connection.execute(
+                text("ALTER TABLE typical_parameter_definitions ADD COLUMN bundle_id VARCHAR(36)")
+            )
+        group_columns = {column["name"] for column in inspector.get_columns("typical_interface_groups")}
+        if "bundle_id" not in group_columns:
+            connection.execute(text("ALTER TABLE typical_interface_groups ADD COLUMN bundle_id VARCHAR(36)"))
+        mapping_columns = {
+            column["name"] for column in inspector.get_columns("typical_interface_mapping_rules")
+        }
+        if "bundle_id" not in mapping_columns:
+            connection.execute(
+                text("ALTER TABLE typical_interface_mapping_rules ADD COLUMN bundle_id VARCHAR(36)")
+            )
+        typical_columns = {column["name"] for column in inspector.get_columns("equipment_typicals")}
+        if "lineage_id" not in typical_columns:
+            connection.execute(text("ALTER TABLE equipment_typicals ADD COLUMN lineage_id VARCHAR(36)"))
+        if "released_from_id" not in typical_columns:
+            connection.execute(text("ALTER TABLE equipment_typicals ADD COLUMN released_from_id VARCHAR(36)"))
+        connection.execute(text("UPDATE equipment_typicals SET lineage_id = id WHERE lineage_id IS NULL"))
     yield
 
 app = FastAPI(
@@ -117,6 +149,14 @@ def typical_detail(typical_id: str, db: Session = Depends(get_db)) -> EquipmentT
     return result
 
 
+@app.get("/api/v1/typicals/{typical_id}/versions", response_model=list[EquipmentTypicalListItem])
+def typical_versions(typical_id: str, db: Session = Depends(get_db)) -> list[EquipmentTypicalListItem]:
+    result = list_typical_versions(db, typical_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="Typical not found")
+    return result
+
+
 @app.put("/api/v1/typicals/{typical_id}", response_model=EquipmentTypicalRead)
 def typical_update(
     typical_id: str, payload: EquipmentTypicalUpdate, db: Session = Depends(get_db)
@@ -131,6 +171,28 @@ def typical_update(
     return result
 
 
+@app.post("/api/v1/typicals/{typical_id}/release", response_model=EquipmentTypicalRead)
+def typical_release(typical_id: str, db: Session = Depends(get_db)) -> EquipmentTypicalRead:
+    try:
+        result = release_typical(db, typical_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if result is None:
+        raise HTTPException(status_code=404, detail="Typical not found")
+    return result
+
+
+@app.post("/api/v1/typicals/{typical_id}/drafts", response_model=EquipmentTypicalRead, status_code=201)
+def typical_new_draft(typical_id: str, db: Session = Depends(get_db)) -> EquipmentTypicalRead:
+    try:
+        result = create_draft_from_released(db, typical_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if result is None:
+        raise HTTPException(status_code=404, detail="Typical not found")
+    return result
+
+
 @app.post("/api/v1/typicals/validate", response_model=TypicalValidationResult)
 def typical_validate(payload: EquipmentTypicalCreate) -> TypicalValidationResult:
     return validate_typical_payload(payload)
@@ -138,6 +200,9 @@ def typical_validate(payload: EquipmentTypicalCreate) -> TypicalValidationResult
 
 @app.delete("/api/v1/typicals/{typical_id}", status_code=204)
 def typical_delete(typical_id: str, db: Session = Depends(get_db)) -> None:
-    deleted = delete_typical(db, typical_id)
+    try:
+        deleted = delete_typical(db, typical_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     if not deleted:
         raise HTTPException(status_code=404, detail="Typical not found")

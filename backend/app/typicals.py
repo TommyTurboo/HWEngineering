@@ -9,6 +9,7 @@ from app.models import (
     EquipmentTypical,
     TypicalInterface,
     TypicalInterfaceGroup,
+    TypicalInterfaceMappingRule,
     TypicalParameter,
     TypicalParameterDefinition,
 )
@@ -76,9 +77,65 @@ def build_interface_groups(payload: EquipmentTypicalCreate) -> list[TypicalInter
             category=group.category,
             side=group.side,
             source=group.source,
+            bundle_id=group.bundle_id,
             sort_order=group.sort_order,
         )
         for group in groups
+    ]
+
+
+def default_interface_mapping_rules(payload: EquipmentTypicalCreate) -> list[TypicalInterfaceMappingRule]:
+    if payload.template_key == "multi_pole_switch_device":
+        rules: list[TypicalInterfaceMappingRule] = []
+        for driver_value, labels in SWITCH_TOPOLOGIES.items():
+            for index, label in enumerate(labels):
+                rules.append(
+                    TypicalInterfaceMappingRule(
+                        driver_parameter_code="power_topology",
+                        driver_value=driver_value,
+                        group_code="input_power",
+                        interface_code=f"{label}_IN",
+                        role="line_in",
+                        logical_type="power",
+                        direction="in",
+                        source="rule",
+                        sort_order=index * 2,
+                    )
+                )
+                rules.append(
+                    TypicalInterfaceMappingRule(
+                        driver_parameter_code="power_topology",
+                        driver_value=driver_value,
+                        group_code="output_power",
+                        interface_code=f"{label}_OUT",
+                        role="load_out",
+                        logical_type="power",
+                        direction="out",
+                        source="rule",
+                        sort_order=index * 2 + 1,
+                    )
+                )
+        return rules
+
+    return []
+
+
+def build_interface_mapping_rules(payload: EquipmentTypicalCreate) -> list[TypicalInterfaceMappingRule]:
+    rules = payload.interface_mapping_rules or default_interface_mapping_rules(payload)
+    return [
+        TypicalInterfaceMappingRule(
+            driver_parameter_code=rule.driver_parameter_code,
+            driver_value=rule.driver_value,
+            group_code=rule.group_code,
+            interface_code=rule.interface_code,
+            role=rule.role,
+            logical_type=rule.logical_type,
+            direction=rule.direction,
+            source=rule.source,
+            bundle_id=rule.bundle_id,
+            sort_order=rule.sort_order,
+        )
+        for rule in rules
     ]
 
 
@@ -119,6 +176,32 @@ def resolve_switch_topology(payload: EquipmentTypicalCreate) -> str:
 
 
 def derive_interfaces(payload: EquipmentTypicalCreate) -> list[TypicalInterface]:
+    mapping_rules = build_interface_mapping_rules(payload)
+    if mapping_rules:
+        parameter_values = {
+            parameter.code.strip().lower(): (
+                getattr(parameter, "default_value", None) or getattr(parameter, "value", None) or ""
+            ).strip()
+            for parameter in _source_parameters(payload)
+        }
+        resolved_interfaces: list[TypicalInterface] = []
+        for rule in mapping_rules:
+            current_value = parameter_values.get(rule.driver_parameter_code.strip().lower(), "")
+            if current_value == rule.driver_value:
+                resolved_interfaces.append(
+                    TypicalInterface(
+                        group_code=rule.group_code,
+                        code=rule.interface_code,
+                        role=rule.role,
+                        logical_type=rule.logical_type,
+                        direction=rule.direction,
+                        source="derived",
+                        sort_order=rule.sort_order,
+                    )
+                )
+        if resolved_interfaces:
+            return resolved_interfaces
+
     interfaces: list[TypicalInterface] = []
     if payload.template_key == "multi_pole_switch_device":
         topology = resolve_switch_topology(payload)
@@ -220,6 +303,7 @@ def validate_typical_payload(payload: EquipmentTypicalCreate) -> TypicalValidati
     issues: list[ValidationIssue] = []
     definitions = payload.parameter_definitions
     groups = build_interface_groups(payload)
+    mapping_rules = build_interface_mapping_rules(payload)
     interfaces = build_interfaces(payload)
 
     if not payload.name.strip():
@@ -471,6 +555,67 @@ def validate_typical_payload(payload: EquipmentTypicalCreate) -> TypicalValidati
             )
         seen_group_codes.add(normalized_group_code)
 
+    seen_mapping_keys: set[tuple[str, str, str]] = set()
+    for rule in mapping_rules:
+        driver_code = rule.driver_parameter_code.strip().lower()
+        driver_value = rule.driver_value.strip()
+        interface_code = rule.interface_code.strip().lower()
+
+        if not driver_code:
+            issues.append(
+                ValidationIssue(
+                    severity="error",
+                    code="missing_mapping_driver_parameter",
+                    message="Een interfacemapping heeft geen driver parameter.",
+                )
+            )
+        if not driver_value:
+            issues.append(
+                ValidationIssue(
+                    severity="error",
+                    code="missing_mapping_driver_value",
+                    message="Een interfacemapping heeft geen driver value.",
+                )
+            )
+        if not interface_code:
+            issues.append(
+                ValidationIssue(
+                    severity="error",
+                    code="missing_mapping_interface_code",
+                    message="Een interfacemapping heeft geen interface code.",
+                )
+            )
+            continue
+
+        mapping_key = (driver_code, driver_value.casefold(), interface_code)
+        if mapping_key in seen_mapping_keys:
+            issues.append(
+                ValidationIssue(
+                    severity="error",
+                    code="duplicate_interface_mapping_rule",
+                    message=f"Dubbele interfacemapping voor '{rule.interface_code}'.",
+                )
+            )
+        seen_mapping_keys.add(mapping_key)
+
+        if rule.group_code and rule.group_code.strip().lower() not in seen_group_codes:
+            issues.append(
+                ValidationIssue(
+                    severity="error",
+                    code="mapping_group_missing",
+                    message=f"Mapping voor '{rule.interface_code}' verwijst naar een onbekende interfacegroep.",
+                )
+            )
+
+        if driver_code not in seen_codes:
+            issues.append(
+                ValidationIssue(
+                    severity="warning",
+                    code="mapping_driver_parameter_missing",
+                    message=f"Mapping gebruikt driver parameter '{rule.driver_parameter_code}' die niet in de parameterdefinities staat.",
+                )
+            )
+
     seen_interface_codes: set[str] = set()
     for interface in interfaces:
         normalized_code = interface.code.strip().lower()
@@ -542,6 +687,7 @@ def _build_parameter_definitions(payload: EquipmentTypicalCreate) -> list[Typica
                 required=1 if parameter.required else 0,
                 is_parametrizable=1 if parameter.is_parametrizable else 0,
                 drives_interfaces=1 if parameter.drives_interfaces else 0,
+                bundle_id=None,
                 sort_order=parameter.sort_order,
             )
             for parameter in payload.parameters
@@ -559,6 +705,7 @@ def _build_parameter_definitions(payload: EquipmentTypicalCreate) -> list[Typica
             required=1 if definition.required else 0,
             is_parametrizable=1 if definition.is_parametrizable else 0,
             drives_interfaces=1 if definition.drives_interfaces else 0,
+            bundle_id=definition.bundle_id,
             sort_order=definition.sort_order,
         )
         for definition in definitions
@@ -600,8 +747,16 @@ def _build_parameters(payload: EquipmentTypicalCreate) -> list[TypicalParameter]
     ]
 
 
+def _build_interface_mapping_rules(payload: EquipmentTypicalCreate) -> list[TypicalInterfaceMappingRule]:
+    return build_interface_mapping_rules(payload)
+
+
 def _normalize_interface_groups(typical: EquipmentTypical) -> EquipmentTypical:
     typical.interface_groups = sorted(typical.interface_groups, key=lambda item: (item.sort_order, item.code))
+    typical.interface_mapping_rules = sorted(
+        typical.interface_mapping_rules,
+        key=lambda item: (item.driver_parameter_code, item.driver_value, item.sort_order, item.interface_code),
+    )
     typical.interfaces = sorted(typical.interfaces, key=lambda item: (item.sort_order, item.code))
     return typical
 
@@ -619,6 +774,78 @@ def _normalize_allowed_values(typical: EquipmentTypical) -> EquipmentTypical:
         else:
             definition.allowed_values = json.dumps([])
     return _normalize_interface_groups(typical)
+
+
+def _to_payload(typical: EquipmentTypical) -> EquipmentTypicalCreate:
+    return EquipmentTypicalCreate(
+        name=typical.name,
+        code=typical.code,
+        description=typical.description,
+        etim_class_id=typical.etim_class_id,
+        template_key=typical.template_key,
+        parameter_definitions=[
+            {
+                "code": definition.code,
+                "name": definition.name,
+                "source": definition.source,
+                "input_type": definition.input_type,
+                "unit": definition.unit,
+                "default_value": definition.default_value,
+                "allowed_values": json.loads(definition.allowed_values) if definition.allowed_values else [],
+                "required": bool(definition.required),
+                "is_parametrizable": bool(definition.is_parametrizable),
+                "drives_interfaces": bool(definition.drives_interfaces),
+                "bundle_id": definition.bundle_id,
+                "sort_order": definition.sort_order,
+            }
+            for definition in typical.parameter_definitions
+        ],
+        interface_groups=[
+            {
+                "code": group.code,
+                "name": group.name,
+                "category": group.category,
+                "side": group.side,
+                "source": group.source,
+                "bundle_id": group.bundle_id,
+                "sort_order": group.sort_order,
+            }
+            for group in typical.interface_groups
+        ],
+        interface_mapping_rules=[
+            {
+                "driver_parameter_code": rule.driver_parameter_code,
+                "driver_value": rule.driver_value,
+                "group_code": rule.group_code,
+                "interface_code": rule.interface_code,
+                "role": rule.role,
+                "logical_type": rule.logical_type,
+                "direction": rule.direction,
+                "source": rule.source,
+                "bundle_id": rule.bundle_id,
+                "sort_order": rule.sort_order,
+            }
+            for rule in typical.interface_mapping_rules
+        ],
+        interfaces=[
+            {
+                "group_code": interface.group_code,
+                "code": interface.code,
+                "role": interface.role,
+                "logical_type": interface.logical_type,
+                "direction": interface.direction,
+                "source": interface.source,
+                "sort_order": interface.sort_order,
+            }
+            for interface in typical.interfaces
+        ],
+        disabled_interface_codes=[],
+        parameters=[],
+    )
+
+
+def _next_version_code(base_code: str, version: int) -> str:
+    return f"{base_code}-draft-v{version}"
 
 
 def create_typical(db: Session, payload: EquipmentTypicalCreate) -> EquipmentTypical:
@@ -640,10 +867,13 @@ def create_typical(db: Session, payload: EquipmentTypicalCreate) -> EquipmentTyp
     typical.parameter_definitions = _build_parameter_definitions(payload)
     typical.parameters = _build_parameters(payload)
     typical.interface_groups = build_interface_groups(payload)
+    typical.interface_mapping_rules = _build_interface_mapping_rules(payload)
     typical.interfaces = build_interfaces(payload)
 
     db.add(typical)
     try:
+        db.flush()
+        typical.lineage_id = typical.id
         db.commit()
     except IntegrityError as exc:
         db.rollback()
@@ -662,6 +892,8 @@ def update_typical(db: Session, typical_id: str, payload: EquipmentTypicalUpdate
     typical = db.get(EquipmentTypical, typical_id)
     if typical is None:
         return None
+    if typical.status == "released":
+        raise ValueError("Released typicals zijn readonly. Maak eerst een nieuwe draft.")
 
     etim_class = get_class_detail(payload.etim_class_id)
     if etim_class is None:
@@ -682,6 +914,9 @@ def update_typical(db: Session, typical_id: str, payload: EquipmentTypicalUpdate
 
     typical.interface_groups.clear()
     typical.interface_groups.extend(build_interface_groups(payload))
+
+    typical.interface_mapping_rules.clear()
+    typical.interface_mapping_rules.extend(_build_interface_mapping_rules(payload))
 
     typical.interfaces.clear()
     typical.interfaces.extend(build_interfaces(payload))
@@ -706,9 +941,30 @@ def list_typicals(db: Session) -> list[EquipmentTypical]:
             selectinload(EquipmentTypical.parameter_definitions),
             selectinload(EquipmentTypical.parameters),
             selectinload(EquipmentTypical.interface_groups),
+            selectinload(EquipmentTypical.interface_mapping_rules),
             selectinload(EquipmentTypical.interfaces),
         )
         .order_by(EquipmentTypical.updated_at.desc())
+    )
+    return [_normalize_allowed_values(item) for item in db.scalars(stmt)]
+
+
+def list_typical_versions(db: Session, typical_id: str) -> list[EquipmentTypical]:
+    typical = db.get(EquipmentTypical, typical_id)
+    if typical is None:
+        return []
+    lineage_id = typical.lineage_id or typical.id
+    stmt = (
+        select(EquipmentTypical)
+        .options(
+            selectinload(EquipmentTypical.parameter_definitions),
+            selectinload(EquipmentTypical.parameters),
+            selectinload(EquipmentTypical.interface_groups),
+            selectinload(EquipmentTypical.interface_mapping_rules),
+            selectinload(EquipmentTypical.interfaces),
+        )
+        .where(EquipmentTypical.lineage_id == lineage_id)
+        .order_by(EquipmentTypical.version.desc(), EquipmentTypical.updated_at.desc())
     )
     return [_normalize_allowed_values(item) for item in db.scalars(stmt)]
 
@@ -721,6 +977,7 @@ def get_typical(db: Session, typical_id: str) -> EquipmentTypical | None:
             selectinload(EquipmentTypical.parameter_definitions),
             selectinload(EquipmentTypical.parameters),
             selectinload(EquipmentTypical.interface_groups),
+            selectinload(EquipmentTypical.interface_mapping_rules),
             selectinload(EquipmentTypical.interfaces),
         )
     )
@@ -732,7 +989,77 @@ def delete_typical(db: Session, typical_id: str) -> bool:
     typical = db.get(EquipmentTypical, typical_id)
     if typical is None:
         return False
+    if typical.status == "released":
+        raise ValueError("Released typicals kunnen niet verwijderd worden.")
 
     db.delete(typical)
     db.commit()
     return True
+
+
+def release_typical(db: Session, typical_id: str) -> EquipmentTypical | None:
+    typical = get_typical(db, typical_id)
+    if typical is None:
+        return None
+    if typical.status == "released":
+        return typical
+
+    validation = validate_typical_payload(_to_payload(typical))
+    if not validation.valid:
+        raise ValueError("Typical kan niet gereleased worden zolang er validatiefouten zijn.")
+
+    db_typical = db.get(EquipmentTypical, typical_id)
+    if db_typical is None:
+        return None
+    db_typical.status = "released"
+    db.commit()
+    db.refresh(db_typical)
+    result = get_typical(db, db_typical.id)
+    return _normalize_allowed_values(result) if result is not None else None
+
+
+def create_draft_from_released(db: Session, typical_id: str) -> EquipmentTypical | None:
+    typical = get_typical(db, typical_id)
+    if typical is None:
+        return None
+    if typical.status != "released":
+        raise ValueError("Alleen vanuit een released typical kan een nieuwe draft gemaakt worden.")
+
+    next_version = typical.version + 1
+    base_code = typical.code.split("-draft-v")[0]
+    next_code = _next_version_code(base_code, next_version)
+    suffix = 2
+    while db.scalar(select(EquipmentTypical.id).where(EquipmentTypical.code == next_code)):
+        next_code = f"{_next_version_code(base_code, next_version)}-{suffix}"
+        suffix += 1
+
+    clone_payload = _to_payload(typical)
+    clone_payload.code = next_code
+    clone = EquipmentTypical(
+        name=typical.name,
+        code=clone_payload.code,
+        description=typical.description,
+        etim_class_id=typical.etim_class_id,
+        etim_class_description=typical.etim_class_description,
+        template_key=typical.template_key,
+        lineage_id=typical.lineage_id or typical.id,
+        released_from_id=typical.id,
+        status="draft",
+        version=next_version,
+    )
+    clone.parameter_definitions = _build_parameter_definitions(clone_payload)
+    clone.parameters = _build_parameters(clone_payload)
+    clone.interface_groups = build_interface_groups(clone_payload)
+    clone.interface_mapping_rules = _build_interface_mapping_rules(clone_payload)
+    clone.interfaces = build_interfaces(clone_payload)
+
+    db.add(clone)
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise ValueError("Nieuwe draft kon niet aangemaakt worden.") from exc
+
+    db.refresh(clone)
+    result = get_typical(db, clone.id)
+    return _normalize_allowed_values(result) if result is not None else None
