@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { DataGrid, GridColDef, GridRenderCellParams } from "@mui/x-data-grid";
+import ProjectWorkspace from "./ProjectWorkspace";
 
 type HealthResponse = {
   status: string;
@@ -3865,6 +3866,8 @@ export default function App() {
             <li>Parametergestuurde interface-afleiding</li>
             <li>Draft en released versies</li>
           </ul>
+
+          <ProjectWorkspace apiBaseUrl={apiBaseUrl} />
         </section>
       </section>
     </main>

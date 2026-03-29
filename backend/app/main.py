@@ -8,8 +8,33 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.database import Base, engine, get_db
 from app.etim_repository import get_class_detail, list_classes
+from app import project_models  # noqa: F401
 from app.presets import create_preset, delete_preset, list_presets, update_preset
+from app.project_schemas import (
+    InstanceCreate,
+    InstanceUpdate,
+    ProjectEquipmentInstanceListItem,
+    ProjectEquipmentInstanceRead,
+    ProjectCreate,
+    ProjectListItem,
+    ProjectRead,
+    ProjectUpdate,
+)
+from app.projects import (
+    create_project,
+    create_project_instance,
+    delete_project,
+    delete_project_instance,
+    get_project,
+    get_project_instance,
+    list_project_instances,
+    list_projects,
+    update_project,
+    update_project_instance,
+    validate_project_instance,
+)
 from app.schemas import EquipmentTypicalCreate, EquipmentTypicalListItem, EquipmentTypicalRead, EquipmentTypicalUpdate, EtimClassDetail, EtimClassSummary, ParameterDefinitionPresetCreate, ParameterDefinitionPresetRead, ParameterDefinitionPresetUpdate, TypicalValidationResult
+from app.project_schemas import InstanceValidationResult
 from app.typicals import create_draft_from_released, create_typical, delete_typical, get_typical, list_typical_versions, list_typicals, release_typical, update_typical, validate_typical_payload
 
 
@@ -206,3 +231,99 @@ def typical_delete(typical_id: str, db: Session = Depends(get_db)) -> None:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if not deleted:
         raise HTTPException(status_code=404, detail="Typical not found")
+
+
+@app.get("/api/v1/projects", response_model=list[ProjectListItem])
+def projects_list(db: Session = Depends(get_db)) -> list[ProjectListItem]:
+    return list_projects(db)
+
+
+@app.post("/api/v1/projects", response_model=ProjectRead, status_code=201)
+def projects_create(payload: ProjectCreate, db: Session = Depends(get_db)) -> ProjectRead:
+    try:
+        return create_project(db, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/v1/projects/{project_id}", response_model=ProjectRead)
+def project_detail(project_id: str, db: Session = Depends(get_db)) -> ProjectRead:
+    result = get_project(db, project_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return result
+
+
+@app.put("/api/v1/projects/{project_id}", response_model=ProjectRead)
+def project_update(project_id: str, payload: ProjectUpdate, db: Session = Depends(get_db)) -> ProjectRead:
+    try:
+        result = update_project(db, project_id, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if result is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return result
+
+
+@app.delete("/api/v1/projects/{project_id}", status_code=204)
+def project_delete(project_id: str, db: Session = Depends(get_db)) -> None:
+    deleted = delete_project(db, project_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+
+@app.get("/api/v1/projects/{project_id}/instances", response_model=list[ProjectEquipmentInstanceListItem])
+def project_instances(project_id: str, db: Session = Depends(get_db)) -> list[ProjectEquipmentInstanceListItem]:
+    if get_project(db, project_id) is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return list_project_instances(db, project_id)
+
+
+@app.post(
+    "/api/v1/projects/{project_id}/instances",
+    response_model=ProjectEquipmentInstanceRead,
+    status_code=201,
+)
+def project_instance_create(
+    project_id: str, payload: InstanceCreate, db: Session = Depends(get_db)
+) -> ProjectEquipmentInstanceRead:
+    try:
+        return create_project_instance(db, project_id, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/v1/instances/{instance_id}", response_model=ProjectEquipmentInstanceRead)
+def project_instance_detail(instance_id: str, db: Session = Depends(get_db)) -> ProjectEquipmentInstanceRead:
+    result = get_project_instance(db, instance_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Instance not found")
+    return result
+
+
+@app.put("/api/v1/instances/{instance_id}", response_model=ProjectEquipmentInstanceRead)
+def project_instance_update(
+    instance_id: str, payload: InstanceUpdate, db: Session = Depends(get_db)
+) -> ProjectEquipmentInstanceRead:
+    try:
+        result = update_project_instance(db, instance_id, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if result is None:
+        raise HTTPException(status_code=404, detail="Instance not found")
+    return result
+
+
+@app.delete("/api/v1/instances/{instance_id}", status_code=204)
+def project_instance_delete(instance_id: str, db: Session = Depends(get_db)) -> None:
+    deleted = delete_project_instance(db, instance_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Instance not found")
+
+
+@app.post("/api/v1/instances/{instance_id}/validate", response_model=InstanceValidationResult)
+def project_instance_validate(instance_id: str, db: Session = Depends(get_db)) -> InstanceValidationResult:
+    instance = get_project_instance(db, instance_id)
+    if instance is None:
+        raise HTTPException(status_code=404, detail="Instance not found")
+    return validate_project_instance(instance)

@@ -610,7 +610,7 @@ def validate_typical_payload(payload: EquipmentTypicalCreate) -> TypicalValidati
         if driver_code not in seen_codes:
             issues.append(
                 ValidationIssue(
-                    severity="warning",
+                    severity="error",
                     code="mapping_driver_parameter_missing",
                     message=f"Mapping gebruikt driver parameter '{rule.driver_parameter_code}' die niet in de parameterdefinities staat.",
                 )
@@ -848,7 +848,19 @@ def _next_version_code(base_code: str, version: int) -> str:
     return f"{base_code}-draft-v{version}"
 
 
+def _enforce_persistable_payload(payload: EquipmentTypicalCreate) -> None:
+    validation = validate_typical_payload(payload)
+    blocking_codes = {
+        "missing_mapping_driver_parameter",
+        "mapping_driver_parameter_missing",
+    }
+    blocking_issues = [issue for issue in validation.issues if issue.code in blocking_codes]
+    if blocking_issues:
+        raise ValueError(blocking_issues[0].message)
+
+
 def create_typical(db: Session, payload: EquipmentTypicalCreate) -> EquipmentTypical:
+    _enforce_persistable_payload(payload)
     etim_class = get_class_detail(payload.etim_class_id)
     if etim_class is None:
         raise ValueError(f"Unknown ETIM class: {payload.etim_class_id}")
@@ -894,6 +906,7 @@ def update_typical(db: Session, typical_id: str, payload: EquipmentTypicalUpdate
         return None
     if typical.status == "released":
         raise ValueError("Released typicals zijn readonly. Maak eerst een nieuwe draft.")
+    _enforce_persistable_payload(payload)
 
     etim_class = get_class_detail(payload.etim_class_id)
     if etim_class is None:
