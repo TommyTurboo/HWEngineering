@@ -217,6 +217,7 @@ Daarom worden bij instance-creatie minstens deze zaken gesnapshot:
 - `GET /api/v1/instances/{instance_id}`
 - `PUT /api/v1/instances/{instance_id}`
 - `DELETE /api/v1/instances/{instance_id}`
+- `POST /api/v1/instances/{instance_id}/duplicate`
 
 ### Instance acties
 
@@ -286,6 +287,23 @@ Blokken:
 
 In `Parameterselectie` kiest de gebruiker alleen waarden die in de snapshot toegelaten zijn.
 
+`required` betekent op dit niveau dat de parameter hier effectief gekozen moet worden.
+De `default_value` uit de snapshot is alleen een optionele voorgestelde instelwaarde.
+
+De instance-editor ondersteunt daarnaast drie parameterlagen:
+
+- `inherited active`
+  - geërfd uit de released typical en actief in dit project
+- `inherited suppressed`
+  - geërfd uit de released typical maar in dit project onderdrukt
+- `project_etim_added`
+  - extra gekozen uit de ETIM-class van de gekoppelde typical
+- `instance_added`
+  - projectspecifieke parameter die niet uit de bibliotheek komt
+
+Daardoor blijft de released typical stabiel, terwijl een projectinstance wel gecontroleerd
+kan uitbreiden of parameters tijdelijk kan uitschakelen.
+
 In `Interfaces` ziet de gebruiker de concrete afgeleide interface-uitkomst voor deze instance.
 
 ## Aanbevolen implementatiefasering
@@ -309,10 +327,11 @@ In `Interfaces` ziet de gebruiker de concrete afgeleide interface-uitkomst voor 
 - instance editor
 - instance validatie
 - herafleiding na parameterwijziging
+- dupliceren van gelijkaardige instances
 
 ### Fase 4
 
-- optionele instance-overrides
+- instance-added parameters en suppressed inherited parameters
 - latere uitbreidingen zoals verbindingen, kabels of exports
 
 ## Wat bewust nog niet in scope zit

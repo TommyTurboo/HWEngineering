@@ -27,6 +27,7 @@ type ProjectInstanceListItem = {
   typical_name: string;
   typical_code: string;
   typical_version: number;
+  etim_class_id: string;
   status: string;
 };
 
@@ -35,10 +36,16 @@ type InstanceDetail = ProjectInstanceListItem & {
     id: string;
     parameter_code: string;
     parameter_name: string;
+    source: string;
     input_type: string;
+    unit?: string | null;
     allowed_values: string[];
     default_value: string | null;
     required: number;
+    is_parametrizable?: number;
+    drives_interfaces?: number;
+    origin: string;
+    visibility: string;
     sort_order: number;
   }[];
   parameter_selections: {
@@ -80,6 +87,27 @@ type InstanceValidationResult = {
   }[];
 };
 
+type EtimFeatureOption = {
+  value_id: string;
+  value_description: string | null;
+  sort_order: number | null;
+};
+
+type EtimFeatureDetail = {
+  art_class_feature_nr: string;
+  feature_id: string;
+  feature_description: string | null;
+  feature_type: string | null;
+  unit_description: string | null;
+  values: EtimFeatureOption[];
+};
+
+type EtimClassDetail = {
+  id: string;
+  description: string;
+  features: EtimFeatureDetail[];
+};
+
 type Props = {
   apiBaseUrl: string;
 };
@@ -97,6 +125,12 @@ export default function ProjectWorkspace({ apiBaseUrl }: Props) {
   const [instanceTag, setInstanceTag] = useState("");
   const [instanceDescription, setInstanceDescription] = useState("");
   const [selectedTypicalId, setSelectedTypicalId] = useState("");
+  const [projectParameterName, setProjectParameterName] = useState("");
+  const [projectParameterCode, setProjectParameterCode] = useState("");
+  const [projectParameterInputType, setProjectParameterInputType] = useState("enum");
+  const [projectParameterAllowedValues, setProjectParameterAllowedValues] = useState("");
+  const [etimClassDetail, setEtimClassDetail] = useState<EtimClassDetail | null>(null);
+  const [selectedEtimFeatureNr, setSelectedEtimFeatureNr] = useState("");
   const [selectedProjectName, setSelectedProjectName] = useState("");
   const [selectedProjectCode, setSelectedProjectCode] = useState("");
   const [selectedProjectDescription, setSelectedProjectDescription] = useState("");
@@ -168,7 +202,14 @@ export default function ProjectWorkspace({ apiBaseUrl }: Props) {
     if (!response.ok) {
       throw new Error("Instance laden mislukt");
     }
-    setSelectedInstance((await response.json()) as InstanceDetail);
+    const payload = (await response.json()) as InstanceDetail;
+    setSelectedInstance(payload);
+    const classResponse = await fetch(`${apiBaseUrl}/api/v1/etim/classes/${payload.etim_class_id}`);
+    if (classResponse.ok) {
+      setEtimClassDetail((await classResponse.json()) as EtimClassDetail);
+    } else {
+      setEtimClassDetail(null);
+    }
   }
 
   async function handleCreateProject(event: FormEvent<HTMLFormElement>) {
@@ -294,6 +335,168 @@ export default function ProjectWorkspace({ apiBaseUrl }: Props) {
     );
   }
 
+  function updateDefinitionVisibility(parameterCode: string, visibility: string) {
+    setSelectedInstance((current) =>
+      current
+        ? {
+            ...current,
+            parameter_definition_snapshots: current.parameter_definition_snapshots.map((definition) =>
+              definition.parameter_code === parameterCode ? { ...definition, visibility } : definition,
+            ),
+          }
+        : current,
+    );
+  }
+
+  function addProjectParameter() {
+    if (!projectParameterName.trim() || !projectParameterCode.trim()) {
+      setError("Projectparameter naam en code zijn verplicht.");
+      return;
+    }
+    setError(null);
+    const allowedValues = projectParameterAllowedValues
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean);
+    setSelectedInstance((current) => {
+      if (!current) return current;
+      if (
+        current.parameter_definition_snapshots.some(
+          (definition) => definition.parameter_code.toLowerCase() === projectParameterCode.trim().toLowerCase(),
+        )
+      ) {
+        setError("Projectparameter code bestaat al in deze instance.");
+        return current;
+      }
+      const nextSortOrder =
+        Math.max(...current.parameter_definition_snapshots.map((definition) => definition.sort_order), 0) + 1;
+      return {
+        ...current,
+        parameter_definition_snapshots: [
+          ...current.parameter_definition_snapshots,
+          {
+            id: `local-${projectParameterCode}-${Date.now()}`,
+            parameter_code: projectParameterCode.trim(),
+            parameter_name: projectParameterName.trim(),
+            source: "project_local",
+            input_type: projectParameterInputType,
+            unit: null,
+            allowed_values: allowedValues,
+            default_value: null,
+            required: 0,
+            is_parametrizable: 1,
+            drives_interfaces: 0,
+            origin: "instance_added",
+            visibility: "active",
+            sort_order: nextSortOrder,
+          },
+        ],
+        parameter_selections: [
+          ...current.parameter_selections,
+          {
+            id: `local-selection-${projectParameterCode}-${Date.now()}`,
+            parameter_code: projectParameterCode.trim(),
+            parameter_name: projectParameterName.trim(),
+            source: "project_local",
+            input_type: projectParameterInputType,
+            selected_value: null,
+            sort_order: nextSortOrder,
+          },
+        ],
+      };
+    });
+    setProjectParameterName("");
+    setProjectParameterCode("");
+    setProjectParameterInputType("enum");
+    setProjectParameterAllowedValues("");
+    setSuccessMessage("Projectparameter toegevoegd aan de instance-editor.");
+  }
+
+  function featureInputType(feature: EtimFeatureDetail): string {
+    if (feature.values.length > 0 || feature.feature_type === "A") {
+      return "enum";
+    }
+    if (feature.feature_type === "L") {
+      return "boolean";
+    }
+    if (feature.feature_type === "N") {
+      return "managed_numeric";
+    }
+    return "managed_value";
+  }
+
+  function addEtimProjectParameter() {
+    if (!selectedInstance || !etimClassDetail || !selectedEtimFeatureNr) {
+      setError("Selecteer eerst een ETIM-feature.");
+      return;
+    }
+    const feature = etimClassDetail.features.find(
+      (item) => item.art_class_feature_nr === selectedEtimFeatureNr,
+    );
+    if (!feature) {
+      setError("Geselecteerde ETIM-feature bestaat niet.");
+      return;
+    }
+    const parameterCode = feature.feature_id.toLowerCase();
+    const parameterName = feature.feature_description ?? feature.feature_id;
+    const allowedValues = feature.values.map(
+      (value) => value.value_description ?? value.value_id,
+    );
+    if (
+      selectedInstance.parameter_definition_snapshots.some(
+        (definition) => definition.parameter_code.toLowerCase() === parameterCode,
+      )
+    ) {
+      setError("Deze ETIM-feature is al aanwezig in de instance.");
+      return;
+    }
+
+    const nextSortOrder =
+      Math.max(...selectedInstance.parameter_definition_snapshots.map((definition) => definition.sort_order), 0) + 1;
+
+    setSelectedInstance((current) =>
+      current
+        ? {
+            ...current,
+            parameter_definition_snapshots: [
+              ...current.parameter_definition_snapshots,
+              {
+                id: `etim-${feature.art_class_feature_nr}-${Date.now()}`,
+                parameter_code: parameterCode,
+                parameter_name: parameterName,
+                source: "etim_feature",
+                input_type: featureInputType(feature),
+                unit: feature.unit_description ?? null,
+                allowed_values: allowedValues,
+                default_value: null,
+                required: 0,
+                is_parametrizable: 1,
+                drives_interfaces: 0,
+                origin: "project_etim_added",
+                visibility: "active",
+                sort_order: nextSortOrder,
+              },
+            ],
+            parameter_selections: [
+              ...current.parameter_selections,
+              {
+                id: `etim-selection-${feature.art_class_feature_nr}-${Date.now()}`,
+                parameter_code: parameterCode,
+                parameter_name: parameterName,
+                source: "etim_feature",
+                input_type: featureInputType(feature),
+                selected_value: null,
+                sort_order: nextSortOrder,
+              },
+            ],
+          }
+        : current,
+    );
+    setSelectedEtimFeatureNr("");
+    setError(null);
+    setSuccessMessage("ETIM-feature toegevoegd aan de instance.");
+  }
+
   async function handleValidateInstance() {
     if (!selectedInstance) return;
     setError(null);
@@ -319,6 +522,21 @@ export default function ProjectWorkspace({ apiBaseUrl }: Props) {
         name: selectedInstance.name,
         tag: selectedInstance.tag,
         description: selectedInstance.description || null,
+        parameter_definition_snapshots: selectedInstance.parameter_definition_snapshots.map((definition) => ({
+          parameter_code: definition.parameter_code,
+          parameter_name: definition.parameter_name,
+          source: definition.source,
+          input_type: definition.input_type,
+          unit: definition.unit || null,
+          allowed_values: definition.allowed_values,
+          default_value: definition.default_value || null,
+          required: definition.required === 1,
+          is_parametrizable: definition.is_parametrizable !== 0,
+          drives_interfaces: definition.drives_interfaces === 1,
+          origin: definition.origin,
+          visibility: definition.visibility,
+          sort_order: definition.sort_order,
+        })),
         parameter_selections: selectedInstance.parameter_selections.map((selection) => ({
           parameter_code: selection.parameter_code,
           selected_value: selection.selected_value || null,
@@ -362,6 +580,24 @@ export default function ProjectWorkspace({ apiBaseUrl }: Props) {
     setSuccessMessage("Instance verwijderd.");
   }
 
+  async function handleDuplicateInstance(instanceId: string) {
+    setError(null);
+    setSuccessMessage(null);
+    const response = await fetch(`${apiBaseUrl}/api/v1/instances/${instanceId}/duplicate`, {
+      method: "POST",
+    });
+    if (!response.ok) {
+      const detail = (await response.json().catch(() => null)) as { detail?: string } | null;
+      setError(detail?.detail ?? "Instance dupliceren mislukt");
+      return;
+    }
+    const duplicated = (await response.json()) as InstanceDetail;
+    if (selectedProjectId) {
+      await refreshInstances(selectedProjectId, duplicated.id);
+    }
+    setSuccessMessage("Instance gedupliceerd.");
+  }
+
   const groupedInterfaces = useMemo(() => {
     if (!selectedInstance) return [];
     const groups = new Map<string, typeof selectedInstance.interfaces>();
@@ -376,6 +612,11 @@ export default function ProjectWorkspace({ apiBaseUrl }: Props) {
 
   const activeDrivers = useMemo(() => {
     if (!selectedInstance) return [];
+    const activeCodes = new Set(
+      selectedInstance.parameter_definition_snapshots
+        .filter((item) => item.visibility === "active")
+        .map((item) => item.parameter_code),
+    );
     const selectionByCode = Object.fromEntries(
       selectedInstance.parameter_selections.map((item) => [item.parameter_code, item.selected_value ?? ""]),
     );
@@ -384,6 +625,9 @@ export default function ProjectWorkspace({ apiBaseUrl }: Props) {
     );
     const counts = new Map<string, number>();
     for (const rule of selectedInstance.interface_mapping_rule_snapshots) {
+      if (!activeCodes.has(rule.driver_parameter_code)) {
+        continue;
+      }
       if ((selectionByCode[rule.driver_parameter_code] ?? "") === rule.driver_value) {
         counts.set(rule.driver_parameter_code, (counts.get(rule.driver_parameter_code) ?? 0) + 1);
       }
@@ -395,6 +639,43 @@ export default function ProjectWorkspace({ apiBaseUrl }: Props) {
       selectedValue: selectionByCode[code] ?? "",
     }));
   }, [selectedInstance]);
+
+  const activeDefinitions = useMemo(
+    () =>
+      (selectedInstance?.parameter_definition_snapshots ?? [])
+        .filter((definition) => definition.visibility === "active" && definition.origin !== "instance_added")
+        .sort((left, right) => left.sort_order - right.sort_order),
+    [selectedInstance],
+  );
+  const suppressedDefinitions = useMemo(
+    () =>
+      (selectedInstance?.parameter_definition_snapshots ?? [])
+        .filter((definition) => definition.visibility === "suppressed")
+        .sort((left, right) => left.sort_order - right.sort_order),
+    [selectedInstance],
+  );
+  const projectDefinitions = useMemo(
+    () =>
+      (selectedInstance?.parameter_definition_snapshots ?? [])
+        .filter(
+          (definition) =>
+            (definition.origin === "instance_added" || definition.origin === "project_etim_added") &&
+            definition.visibility === "active",
+        )
+        .sort((left, right) => left.sort_order - right.sort_order),
+    [selectedInstance],
+  );
+  const availableEtimFeatures = useMemo(() => {
+    if (!selectedInstance || !etimClassDetail) return [];
+    const existingCodes = new Set(
+      selectedInstance.parameter_definition_snapshots.map((definition) =>
+        definition.parameter_code.toLowerCase(),
+      ),
+    );
+    return etimClassDetail.features.filter(
+      (feature) => !existingCodes.has(feature.feature_id.toLowerCase()),
+    );
+  }, [etimClassDetail, selectedInstance]);
 
   return (
     <section className="roadmap-card">
@@ -560,6 +841,13 @@ export default function ProjectWorkspace({ apiBaseUrl }: Props) {
                         Open
                       </button>
                       <button
+                        className="secondary-button"
+                        onClick={() => void handleDuplicateInstance(instance.id)}
+                        type="button"
+                      >
+                        Dupliceer
+                      </button>
+                      <button
                         className="delete-button"
                         onClick={() => void handleDeleteInstance(instance.id)}
                         type="button"
@@ -609,22 +897,138 @@ export default function ProjectWorkspace({ apiBaseUrl }: Props) {
             </label>
           </div>
 
-          <h3>Parameterselectie</h3>
+          <h3>Standaardparameters</h3>
           <div className="definition-grid">
-            {selectedInstance.parameter_definition_snapshots
-              .slice()
-              .sort((left, right) => left.sort_order - right.sort_order)
-              .map((definition) => {
-                const currentValue = selectionMap[definition.parameter_code] ?? "";
-                const isSelect = definition.allowed_values.length > 0;
-                return (
-                  <label className="field" key={definition.id}>
+            {activeDefinitions.map((definition) => {
+              const currentValue = selectionMap[definition.parameter_code] ?? "";
+              const isSelect = definition.allowed_values.length > 0;
+              return (
+                <div className="editor-panel" key={definition.id}>
+                  <label className="field">
                     <span>
                       {definition.parameter_name || definition.parameter_code}
                       {definition.required === 1 ? " *" : ""}
                     </span>
+                    <small className="helper-text">{definition.parameter_code}</small>
+                    {isSelect ? (
+                      <select
+                        value={currentValue}
+                        onChange={(event) => updateSelection(definition.parameter_code, event.target.value)}
+                      >
+                        <option value="">Selecteer waarde</option>
+                        {definition.allowed_values.map((value) => (
+                          <option key={value} value={value}>
+                            {value}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <input
+                        value={currentValue}
+                        onChange={(event) => updateSelection(definition.parameter_code, event.target.value)}
+                      />
+                    )}
+                  </label>
+                  <div className="editor-actions">
+                    <button
+                      className="secondary-button"
+                      onClick={() => updateDefinitionVisibility(definition.parameter_code, "suppressed")}
+                      type="button"
+                    >
+                      Verberg in project
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          <h3>Projectparameters</h3>
+          <div className="editor-panel">
+            <div className="definition-grid">
+              <label className="field">
+                <span>Voeg ETIM-feature toe</span>
+                <select
+                  value={selectedEtimFeatureNr}
+                  onChange={(event) => setSelectedEtimFeatureNr(event.target.value)}
+                >
+                  <option value="">Selecteer ETIM-feature</option>
+                  {availableEtimFeatures.map((feature) => (
+                    <option key={feature.art_class_feature_nr} value={feature.art_class_feature_nr}>
+                      {feature.feature_description ?? feature.feature_id}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            <div className="editor-actions">
+              <button
+                className="secondary-button"
+                disabled={!selectedEtimFeatureNr}
+                onClick={addEtimProjectParameter}
+                type="button"
+              >
+                Voeg ETIM-parameter toe
+              </button>
+            </div>
+          </div>
+
+          <div className="editor-panel">
+            <div className="definition-grid">
+              <label className="field">
+                <span>Naam</span>
+                <input
+                  value={projectParameterName}
+                  onChange={(event) => setProjectParameterName(event.target.value)}
+                />
+              </label>
+              <label className="field">
+                <span>Code</span>
+                <input
+                  value={projectParameterCode}
+                  onChange={(event) => setProjectParameterCode(event.target.value)}
+                />
+              </label>
+              <label className="field">
+                <span>Type</span>
+                <select
+                  value={projectParameterInputType}
+                  onChange={(event) => setProjectParameterInputType(event.target.value)}
+                >
+                  <option value="enum">enum</option>
+                  <option value="managed_numeric">managed_numeric</option>
+                  <option value="boolean">boolean</option>
+                  <option value="managed_value">managed_value</option>
+                </select>
+              </label>
+              <label className="field">
+                <span>Allowed values</span>
+                <input
+                  value={projectParameterAllowedValues}
+                  onChange={(event) => setProjectParameterAllowedValues(event.target.value)}
+                />
+              </label>
+            </div>
+            <div className="editor-actions">
+              <button onClick={addProjectParameter} type="button">
+                Voeg projectparameter toe
+              </button>
+            </div>
+          </div>
+
+          <div className="definition-grid">
+            {projectDefinitions.map((definition) => {
+              const currentValue = selectionMap[definition.parameter_code] ?? "";
+              const isSelect = definition.allowed_values.length > 0;
+              return (
+                <div className="editor-panel" key={definition.id}>
+                  <label className="field">
+                    <span>{definition.parameter_name || definition.parameter_code}</span>
                     <small className="helper-text">
-                      {definition.parameter_code}
+                      {definition.parameter_code} ·{" "}
+                      {definition.origin === "project_etim_added"
+                        ? "ETIM projectparameter"
+                        : "vrije projectparameter"}
                     </small>
                     {isSelect ? (
                       <select
@@ -645,8 +1049,34 @@ export default function ProjectWorkspace({ apiBaseUrl }: Props) {
                       />
                     )}
                   </label>
-                );
-              })}
+                </div>
+              );
+            })}
+          </div>
+
+          <h3>Verborgen parameters</h3>
+          <div className="list-panel">
+            {suppressedDefinitions.length === 0 ? (
+              <p className="empty-state">Geen verborgen parameters.</p>
+            ) : (
+              suppressedDefinitions.map((definition) => (
+                <article className="typical-card" key={definition.id}>
+                  <div className="typical-card-body">
+                    <strong>{definition.parameter_name}</strong>
+                    <small>{definition.parameter_code}</small>
+                  </div>
+                  <div className="typical-actions">
+                    <button
+                      className="secondary-button"
+                      onClick={() => updateDefinitionVisibility(definition.parameter_code, "active")}
+                      type="button"
+                    >
+                      Herstel
+                    </button>
+                  </div>
+                </article>
+              ))
+            )}
           </div>
 
           <h3>Actieve drivers</h3>
@@ -723,6 +1153,13 @@ export default function ProjectWorkspace({ apiBaseUrl }: Props) {
           <div className="editor-actions">
             <button onClick={() => void handleSaveInstance()} type="button">
               Sla instance op
+            </button>
+            <button
+              className="secondary-button"
+              onClick={() => void handleDuplicateInstance(selectedInstance.id)}
+              type="button"
+            >
+              Dupliceer instance
             </button>
             <button className="secondary-button" onClick={() => void handleValidateInstance()} type="button">
               Valideer instance

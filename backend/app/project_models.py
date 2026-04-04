@@ -83,6 +83,8 @@ class InstanceParameterDefinitionSnapshot(Base):
     required: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     is_parametrizable: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     drives_interfaces: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    origin: Mapped[str] = mapped_column(String(30), default="inherited", nullable=False)
+    visibility: Mapped[str] = mapped_column(String(20), default="active", nullable=False)
     sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
     instance: Mapped[ProjectEquipmentInstance] = relationship(back_populates="parameter_definition_snapshots")

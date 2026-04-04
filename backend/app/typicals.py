@@ -4,7 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
-from app.etim_repository import get_class_detail
+from app.etim_repository import get_art_group_descriptions, get_class_detail
 from app.models import (
     EquipmentTypical,
     TypicalInterface,
@@ -452,28 +452,6 @@ def validate_typical_payload(payload: EquipmentTypicalCreate) -> TypicalValidati
                     severity="error",
                     code="default_not_in_allowed_values",
                     message=f"Defaultwaarde '{default_value}' zit niet in allowed values.",
-                    parameter_code=definition.code,
-                    parameter_name=definition.name,
-                )
-            )
-
-        if definition.required and not default_value:
-            issues.append(
-                ValidationIssue(
-                    severity="warning",
-                    code="required_without_default",
-                    message="Required parameter heeft geen defaultwaarde.",
-                    parameter_code=definition.code,
-                    parameter_name=definition.name,
-                )
-            )
-
-        if definition.drives_interfaces and not default_value:
-            issues.append(
-                ValidationIssue(
-                    severity="warning",
-                    code="interface_driver_without_default",
-                    message="Interface-driver heeft geen defaultwaarde; interface-afleiding is dan onzeker.",
                     parameter_code=definition.code,
                     parameter_name=definition.name,
                 )
@@ -960,6 +938,69 @@ def list_typicals(db: Session) -> list[EquipmentTypical]:
         .order_by(EquipmentTypical.updated_at.desc())
     )
     return [_normalize_allowed_values(item) for item in db.scalars(stmt)]
+
+
+def list_latest_typicals_grouped(db: Session) -> list[dict]:
+    stmt = (
+        select(EquipmentTypical)
+        .options(
+            selectinload(EquipmentTypical.parameter_definitions),
+            selectinload(EquipmentTypical.parameters),
+            selectinload(EquipmentTypical.interface_groups),
+            selectinload(EquipmentTypical.interface_mapping_rules),
+            selectinload(EquipmentTypical.interfaces),
+        )
+        .order_by(EquipmentTypical.updated_at.desc())
+    )
+    all_typicals = list(db.scalars(stmt))
+
+    latest_by_lineage: dict[str, EquipmentTypical] = {}
+    for typical in all_typicals:
+        lineage_key = typical.lineage_id or typical.id
+        existing = latest_by_lineage.get(lineage_key)
+        if existing is None:
+            latest_by_lineage[lineage_key] = typical
+            continue
+        if (typical.version, typical.updated_at) > (existing.version, existing.updated_at):
+            latest_by_lineage[lineage_key] = typical
+
+    latest_typicals = [_normalize_allowed_values(item) for item in latest_by_lineage.values()]
+    group_ids = [item.group_id for item in [get_class_detail(typical.etim_class_id) for typical in latest_typicals] if item and item.group_id]
+    group_descriptions = get_art_group_descriptions(group_ids)
+
+    grouped: dict[str, dict] = {}
+    for typical in latest_typicals:
+        etim_class = get_class_detail(typical.etim_class_id)
+        group_id = etim_class.group_id if etim_class and etim_class.group_id else "UNGROUPED"
+        group_description = group_descriptions.get(group_id, group_id if group_id != "UNGROUPED" else "Ungrouped")
+        grouped.setdefault(
+            group_id,
+            {"group_id": group_id, "group_description": group_description, "typicals": []},
+        )
+        grouped[group_id]["typicals"].append(
+            {
+                "id": typical.id,
+                "lineage_id": typical.lineage_id,
+                "name": typical.name,
+                "code": typical.code,
+                "etim_class_id": typical.etim_class_id,
+                "etim_class_description": typical.etim_class_description,
+                "status": typical.status,
+                "version": typical.version,
+                "updated_at": typical.updated_at,
+            }
+        )
+
+    return sorted(
+        [
+            {
+                **group,
+                "typicals": sorted(group["typicals"], key=lambda item: item["name"].lower()),
+            }
+            for group in grouped.values()
+        ],
+        key=lambda item: item["group_description"].lower(),
+    )
 
 
 def list_typical_versions(db: Session, typical_id: str) -> list[EquipmentTypical]:

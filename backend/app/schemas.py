@@ -355,3 +355,21 @@ class EquipmentTypicalListItem(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class TypicalLibraryLeaf(BaseModel):
+    id: str
+    lineage_id: str | None = None
+    name: str
+    code: str
+    etim_class_id: str
+    etim_class_description: str
+    status: str
+    version: int
+    updated_at: datetime
+
+
+class TypicalLibraryGroup(BaseModel):
+    group_id: str
+    group_description: str
+    typicals: list[TypicalLibraryLeaf] = Field(default_factory=list)

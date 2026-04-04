@@ -61,6 +61,7 @@ def _normalize_instance(instance: ProjectEquipmentInstance) -> ProjectEquipmentI
 def _derive_instance_interfaces(
     selections: list[InstanceParameterSelection],
     rules: list[InstanceInterfaceMappingRuleSnapshot],
+    active_parameter_codes: set[str] | None = None,
 ) -> list[InstanceInterface]:
     selected_values = {
         selection.parameter_code.strip().lower(): (selection.selected_value or "").strip()
@@ -68,7 +69,10 @@ def _derive_instance_interfaces(
     }
     interfaces: list[InstanceInterface] = []
     for rule in rules:
-        if selected_values.get(rule.driver_parameter_code.strip().lower(), "") == rule.driver_value:
+        normalized_driver_code = rule.driver_parameter_code.strip().lower()
+        if active_parameter_codes is not None and normalized_driver_code not in active_parameter_codes:
+            continue
+        if selected_values.get(normalized_driver_code, "") == rule.driver_value:
             interfaces.append(
                 InstanceInterface(
                     group_code=rule.group_code,
@@ -89,12 +93,19 @@ def validate_project_instance(instance: ProjectEquipmentInstance) -> InstanceVal
         definition.parameter_code.strip().lower(): definition
         for definition in instance.parameter_definition_snapshots
     }
+    active_definition_codes = {
+        definition.parameter_code.strip().lower()
+        for definition in instance.parameter_definition_snapshots
+        if definition.visibility == "active"
+    }
     selection_by_code = {
         selection.parameter_code.strip().lower(): selection
         for selection in instance.parameter_selections
     }
 
     for definition in instance.parameter_definition_snapshots:
+        if definition.visibility != "active":
+            continue
         allowed_values: list[str] = []
         if definition.allowed_values_json:
             try:
@@ -135,6 +146,8 @@ def validate_project_instance(instance: ProjectEquipmentInstance) -> InstanceVal
     for driver_code in driver_codes:
         definition = definition_by_code.get(driver_code)
         selection = selection_by_code.get(driver_code)
+        if definition is not None and definition.visibility != "active":
+            continue
         if definition is None:
             issues.append(
                 InstanceValidationIssue(
@@ -158,7 +171,9 @@ def validate_project_instance(instance: ProjectEquipmentInstance) -> InstanceVal
             )
 
     derived_interfaces = _derive_instance_interfaces(
-        instance.parameter_selections, instance.interface_mapping_rule_snapshots
+        instance.parameter_selections,
+        instance.interface_mapping_rule_snapshots,
+        active_definition_codes,
     )
     if not derived_interfaces:
         issues.append(
@@ -309,6 +324,8 @@ def _snapshot_definitions_and_selections(typical: EquipmentTypical) -> tuple[
                 required=definition.required,
                 is_parametrizable=definition.is_parametrizable,
                 drives_interfaces=definition.drives_interfaces,
+                origin="inherited",
+                visibility="active",
                 sort_order=definition.sort_order,
             )
         )
@@ -363,6 +380,8 @@ def _snapshot_definitions_and_selections(typical: EquipmentTypical) -> tuple[
                 required=required,
                 is_parametrizable=is_parametrizable,
                 drives_interfaces=1,
+                origin="inherited",
+                visibility="active",
                 sort_order=next_sort_order,
             )
         )
@@ -429,7 +448,13 @@ def create_project_instance(db: Session, project_id: str, payload: InstanceCreat
         for rule in typical.interface_mapping_rules
     ]
     instance.interfaces = _derive_instance_interfaces(
-        instance.parameter_selections, instance.interface_mapping_rule_snapshots
+        instance.parameter_selections,
+        instance.interface_mapping_rule_snapshots,
+        {
+            definition.parameter_code.strip().lower()
+            for definition in instance.parameter_definition_snapshots
+            if definition.visibility == "active"
+        },
     )
 
     db.add(instance)
@@ -439,6 +464,97 @@ def create_project_instance(db: Session, project_id: str, payload: InstanceCreat
     if result is None:
         raise ValueError("Instance kon niet opnieuw geladen worden.")
     return result
+
+
+def duplicate_project_instance(db: Session, instance_id: str) -> ProjectEquipmentInstance | None:
+    source = get_project_instance(db, instance_id)
+    if source is None:
+        return None
+
+    duplicate = ProjectEquipmentInstance(
+        project_id=source.project_id,
+        name=f"{source.name} kopie",
+        tag=f"{source.tag}-copy",
+        description=source.description,
+        typical_id=source.typical_id,
+        typical_lineage_id=source.typical_lineage_id,
+        typical_version=source.typical_version,
+        typical_code=source.typical_code,
+        typical_name=source.typical_name,
+        etim_class_id=source.etim_class_id,
+        status=source.status,
+    )
+
+    duplicate.parameter_definition_snapshots = [
+        InstanceParameterDefinitionSnapshot(
+            parameter_code=definition.parameter_code,
+            parameter_name=definition.parameter_name,
+            source=definition.source,
+            input_type=definition.input_type,
+            unit=definition.unit,
+            allowed_values_json=definition.allowed_values_json,
+            default_value=definition.default_value,
+            required=definition.required,
+            is_parametrizable=definition.is_parametrizable,
+            drives_interfaces=definition.drives_interfaces,
+            origin=definition.origin,
+            visibility=definition.visibility,
+            sort_order=definition.sort_order,
+        )
+        for definition in source.parameter_definition_snapshots
+    ]
+    duplicate.parameter_selections = [
+        InstanceParameterSelection(
+            parameter_code=selection.parameter_code,
+            parameter_name=selection.parameter_name,
+            source=selection.source,
+            input_type=selection.input_type,
+            unit=selection.unit,
+            selected_value=selection.selected_value,
+            sort_order=selection.sort_order,
+        )
+        for selection in source.parameter_selections
+    ]
+    duplicate.interface_groups = [
+        InstanceInterfaceGroup(
+            code=group.code,
+            name=group.name,
+            category=group.category,
+            side=group.side,
+            sort_order=group.sort_order,
+        )
+        for group in source.interface_groups
+    ]
+    duplicate.interface_mapping_rule_snapshots = [
+        InstanceInterfaceMappingRuleSnapshot(
+            driver_parameter_code=rule.driver_parameter_code,
+            driver_value=rule.driver_value,
+            group_code=rule.group_code,
+            interface_code=rule.interface_code,
+            role=rule.role,
+            logical_type=rule.logical_type,
+            direction=rule.direction,
+            sort_order=rule.sort_order,
+        )
+        for rule in source.interface_mapping_rule_snapshots
+    ]
+    duplicate.interfaces = [
+        InstanceInterface(
+            group_code=interface.group_code,
+            code=interface.code,
+            role=interface.role,
+            logical_type=interface.logical_type,
+            direction=interface.direction,
+            source=interface.source,
+            sort_order=interface.sort_order,
+        )
+        for interface in source.interfaces
+    ]
+
+    db.add(duplicate)
+    db.commit()
+    db.refresh(duplicate)
+    return get_project_instance(db, duplicate.id)
 
 
 def get_project_instance(db: Session, instance_id: str) -> ProjectEquipmentInstance | None:
@@ -466,9 +582,58 @@ def update_project_instance(
     selection_by_code = {
         selection.parameter_code.strip().lower(): selection for selection in hydrated.parameter_selections
     }
+    hydrated.parameter_definition_snapshots.clear()
+    hydrated.parameter_definition_snapshots.extend(
+        [
+            InstanceParameterDefinitionSnapshot(
+                parameter_code=definition.parameter_code,
+                parameter_name=definition.parameter_name,
+                source=definition.source,
+                input_type=definition.input_type,
+                unit=definition.unit,
+                allowed_values_json=json.dumps(definition.allowed_values),
+                default_value=definition.default_value,
+                required=1 if definition.required else 0,
+                is_parametrizable=1 if definition.is_parametrizable else 0,
+                drives_interfaces=1 if definition.drives_interfaces else 0,
+                origin=definition.origin,
+                visibility=definition.visibility,
+                sort_order=definition.sort_order,
+            )
+            for definition in payload.parameter_definition_snapshots
+        ]
+    )
     definition_by_code = {
-        definition.parameter_code.strip().lower(): definition
-        for definition in hydrated.parameter_definition_snapshots
+        definition.parameter_code.strip().lower(): definition for definition in hydrated.parameter_definition_snapshots
+    }
+
+    existing_codes = set(selection_by_code.keys())
+    incoming_codes = {definition.parameter_code.strip().lower() for definition in payload.parameter_definition_snapshots}
+    for removed_code in existing_codes - incoming_codes:
+        hydrated.parameter_selections = [
+            selection
+            for selection in hydrated.parameter_selections
+            if selection.parameter_code.strip().lower() != removed_code
+        ]
+    selection_by_code = {
+        selection.parameter_code.strip().lower(): selection for selection in hydrated.parameter_selections
+    }
+    for definition in hydrated.parameter_definition_snapshots:
+        normalized_code = definition.parameter_code.strip().lower()
+        if normalized_code not in selection_by_code:
+            hydrated.parameter_selections.append(
+                InstanceParameterSelection(
+                    parameter_code=definition.parameter_code,
+                    parameter_name=definition.parameter_name,
+                    source=definition.source,
+                    input_type=definition.input_type,
+                    unit=definition.unit,
+                    selected_value=definition.default_value,
+                    sort_order=definition.sort_order,
+                )
+            )
+    selection_by_code = {
+        selection.parameter_code.strip().lower(): selection for selection in hydrated.parameter_selections
     }
     for incoming in payload.parameter_selections:
         normalized_code = incoming.parameter_code.strip().lower()
@@ -492,8 +657,17 @@ def update_project_instance(
         selection.selected_value = normalized_value
 
     hydrated.interfaces.clear()
+    active_definition_codes = {
+        definition.parameter_code.strip().lower()
+        for definition in hydrated.parameter_definition_snapshots
+        if definition.visibility == "active"
+    }
     hydrated.interfaces.extend(
-        _derive_instance_interfaces(hydrated.parameter_selections, hydrated.interface_mapping_rule_snapshots)
+        _derive_instance_interfaces(
+            hydrated.parameter_selections,
+            hydrated.interface_mapping_rule_snapshots,
+            active_definition_codes,
+        )
     )
 
     db.commit()

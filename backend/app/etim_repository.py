@@ -38,6 +38,23 @@ def list_classes(search: str | None = None, limit: int = 25) -> list[EtimClassSu
     ]
 
 
+def get_art_group_descriptions(group_ids: list[str]) -> dict[str, str]:
+    normalized = [group_id for group_id in group_ids if group_id]
+    if not normalized:
+        return {}
+
+    placeholders = ",".join("?" for _ in normalized)
+    query = f"""
+        SELECT ARTGROUPID, GROUPDESC
+        FROM ETIM_ART_GROUP
+        WHERE ARTGROUPID IN ({placeholders})
+    """
+    with _connect() as conn:
+        rows = conn.execute(query, normalized).fetchall()
+
+    return {row["ARTGROUPID"]: row["GROUPDESC"] for row in rows}
+
+
 def get_class_detail(art_class_id: str) -> EtimClassDetail | None:
     with _connect() as conn:
         class_row = conn.execute(

@@ -82,7 +82,7 @@ De Equipment Typical-laag levert:
 - engineeringnaam en interne code
 - selectie van relevante parameters
 - governance op parameterniveau
-- defaultwaarden
+- optionele instelwaarden
 - required versus optional
 - interfacegedrag
 - validatieregels
@@ -103,7 +103,7 @@ Die laag bepaalt per geselecteerde ETIM-feature:
 - wordt deze feature opgenomen in de typical of niet
 - is de invoervorm `enum`, `boolean`, `fixed numeric list`, `range` of `fixed value`
 - welke waarden zijn intern toegelaten
-- wat is de defaultwaarde
+- wat is de optionele instelwaarde
 - is het kenmerk parametriseerbaar
 - hoe mappen interne waarden terug naar de ETIM-semantiek
 
@@ -111,6 +111,12 @@ Belangrijk principe:
 
 - **closed input by default**
 - vrije tekst of vrije numerieke invoer alleen als expliciete uitzondering
+
+Interpretatie van `required` en `instelwaarde`:
+
+- `required` betekent dat een parameter later op instance-niveau ingevuld moet zijn
+- `instelwaarde` op typicalniveau is optioneel en dient alleen als voorstel
+- een lege instelwaarde op typicalniveau is dus geldig
 
 Voorbeelden:
 
@@ -226,13 +232,12 @@ Voorbeelden:
 
 ### 1. Bibliotheekoverzicht
 
-Lijst van alle `Equipment Typicals` met:
+Boomstructuur van alle `Equipment Typicals` met:
 
-- naam
-- ETIM-klasse
-- status
-- laatste wijzigingsdatum
-- laatste bewerker
+- een eigen bibliotheektaxonomie voor functionele navigatie
+- fallback op ETIM-groepen zolang een typical nog niet in de eigen taxonomie geplaatst is
+- per lineage alleen de laatste versie zichtbaar in de boom
+- naam, status en versie op leaf-niveau
 
 ### 2. Typical Editor
 
@@ -273,6 +278,25 @@ Belangrijke architectuurkeuzes:
 - relationele kern in PostgreSQL
 - `jsonb` alleen voor flexibele metadata of rule-config
 - geen microservices in V1
+- schemawijzigingen verlopen voortaan via `Alembic` migraties
+
+## Bibliotheektaxonomie
+
+Naast de ETIM-classificatie komt er een eigen bibliotheekboom voor de UI.
+
+Die laag bestaat uit:
+
+- `library_nodes`
+  - hiërarchische mappen of families
+- `typical_library_links`
+  - koppeling van een typical-lineage aan één of meer library nodes
+
+Belangrijke regels:
+
+- koppelingen gebeuren op `lineage_id`, niet op individuele versie-id
+- de boom toont steeds de laatste versie van een lineage
+- een typical kan in meerdere nodes voorkomen, met één primaire koppeling
+- zolang er nog geen library nodes bestaan, blijft de UI terugvallen op de ETIM-groepen
 
 ## Fases
 
@@ -321,11 +345,11 @@ Belangrijke architectuurkeuzes:
 - ETIM-klasses kunnen gezocht en geselecteerd worden
 - typicals kunnen aangemaakt, bewerkt en verwijderd worden
 - geselecteerde ETIM-features kunnen omgezet worden naar `TypicalParameterDefinitions`
-- per parameterdefinitie kunnen inputtype, default, allowed values en governance-flags beheerd worden
+- per parameterdefinitie kunnen inputtype, instelwaarde, allowed values en governance-flags beheerd worden
 - parameterdefinities kunnen als herbruikbare presets opgeslagen, toegepast en verwijderd worden
 - interfacegroepen kunnen aangemaakt, aangepast en verwijderd worden
 - interfaces kunnen aan groepen gekoppeld worden
-- interface-afleiding leest governed defaults en kent nu group-aware derived interfaces
+- interface-afleiding leest governed instelwaarden en kent nu group-aware derived interfaces
 - voor `multi_pole_switch_device` wordt nu `power_topology` gebruikt als primaire driver
 - ondersteunde topologies voor de huidige bootstrap zijn:
   - `L`
@@ -333,9 +357,14 @@ Belangrijke architectuurkeuzes:
   - `3L`
   - `3L+N`
 - validatie op parameterdefinitions is beschikbaar via een apart validatiepaneel
-- validatie controleert onder meer enums zonder waarden, niet-numerieke `managed_numeric` waarden, booleans, duplicaten, interface-drivers zonder bruikbare default, ongeldige group-links en ongeldige `power_topology` waarden
+- validatie controleert onder meer enums zonder waarden, niet-numerieke `managed_numeric` waarden, booleans, duplicaten, ongeldige group-links en ongeldige `power_topology` waarden
 - de editor waarschuwt nu bij niet-opgeslagen wijzigingen
 - lokale end-to-end flow is gevalideerd via Docker en backend API-tests
+- hiërarchische typical tree via `MUI X Tree View` is actief
+- eigen bibliotheektaxonomie is voorzien in backendmodellen en API
+- Alembic-basissetup is toegevoegd voor nieuwe schemawijzigingen
+- projectinstances kunnen nu naast inherited parameters ook suppressed en project-added parameters dragen
+- projectinstances kunnen ook extra ETIM-features van dezelfde class opnemen zonder de released typical te wijzigen
 
 ## Next Step
 

@@ -43,12 +43,29 @@ class InstanceUpdate(BaseModel):
     name: str
     tag: str
     description: str | None = None
+    parameter_definition_snapshots: list["InstanceParameterDefinitionSnapshotWrite"] = Field(default_factory=list)
     parameter_selections: list["InstanceParameterSelectionWrite"] = Field(default_factory=list)
 
 
 class InstanceParameterSelectionWrite(BaseModel):
     parameter_code: str
     selected_value: str | None = None
+
+
+class InstanceParameterDefinitionSnapshotWrite(BaseModel):
+    parameter_code: str
+    parameter_name: str
+    source: str
+    input_type: str
+    unit: str | None = None
+    allowed_values: list[str] = Field(default_factory=list)
+    default_value: str | None = None
+    required: bool = False
+    is_parametrizable: bool = True
+    drives_interfaces: bool = False
+    origin: str = "inherited"
+    visibility: str = "active"
+    sort_order: int = 0
 
 
 class InstanceParameterDefinitionSnapshotRead(BaseModel):
@@ -63,6 +80,8 @@ class InstanceParameterDefinitionSnapshotRead(BaseModel):
     required: int
     is_parametrizable: int
     drives_interfaces: int
+    origin: str
+    visibility: str
     sort_order: int
 
     class Config:

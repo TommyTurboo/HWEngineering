@@ -1,6 +1,8 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, MouseEvent, useEffect, useMemo, useState } from "react";
+import { Menu, MenuItem } from "@mui/material";
 import { DataGrid, GridColDef, GridRenderCellParams } from "@mui/x-data-grid";
 import ProjectWorkspace from "./ProjectWorkspace";
+import TypicalLibraryTree from "./TypicalLibraryTree";
 
 type HealthResponse = {
   status: string;
@@ -167,6 +169,49 @@ type EquipmentTypicalDetail = EquipmentTypical & {
     sort_order: number;
   }[];
 };
+
+type LibraryTreeNode = {
+  node_id: string;
+  parent_id?: string | null;
+  code: string;
+  name: string;
+  node_type: string;
+  source: string;
+  sort_order: number;
+  children: LibraryTreeNode[];
+  typicals: {
+    id: string;
+    lineage_id?: string | null;
+    name: string;
+    code: string;
+    etim_class_id: string;
+    etim_class_description: string;
+    status: string;
+    version: number;
+  }[];
+};
+
+type LibraryNode = {
+  id: string;
+  parent_id?: string | null;
+  code: string;
+  name: string;
+  node_type: string;
+  sort_order: number;
+  is_active: number;
+};
+
+type TypicalLibraryPlacement = {
+  typical_lineage_id: string;
+  library_node_ids: string[];
+  primary_library_node_id?: string | null;
+};
+
+type TreeContextMenuState = {
+  mouseX: number;
+  mouseY: number;
+  node: LibraryTreeNode;
+} | null;
 
 type ParameterDefinitionPreset = {
   id: string;
@@ -1029,8 +1074,11 @@ export default function App() {
   const [classes, setClasses] = useState<EtimClassSummary[]>([]);
   const [classDetail, setClassDetail] = useState<EtimClassDetail | null>(null);
   const [typicals, setTypicals] = useState<EquipmentTypical[]>([]);
+  const [libraryTree, setLibraryTree] = useState<LibraryTreeNode[]>([]);
+  const [libraryNodes, setLibraryNodes] = useState<LibraryNode[]>([]);
   const [typicalVersions, setTypicalVersions] = useState<EquipmentTypical[]>([]);
   const [selectedTypicalId, setSelectedTypicalId] = useState<string | null>(null);
+  const [selectedTypicalLineageId, setSelectedTypicalLineageId] = useState<string | null>(null);
   const [selectedTypicalStatus, setSelectedTypicalStatus] = useState<"draft" | "released">("draft");
   const [selectedTypicalVersion, setSelectedTypicalVersion] = useState<number>(1);
   const [mode, setMode] = useState<"create" | "edit">("create");
@@ -1049,6 +1097,11 @@ export default function App() {
   const [presetDraft, setPresetDraft] = useState<EditablePreset | null>(null);
   const [presetSelection, setPresetSelection] = useState<Record<string, string>>({});
   const [localPresetSelection, setLocalPresetSelection] = useState("");
+  const [libraryNodeName, setLibraryNodeName] = useState("");
+  const [libraryNodeCode, setLibraryNodeCode] = useState("");
+  const [libraryNodeParentId, setLibraryNodeParentId] = useState("");
+  const [libraryPlacement, setLibraryPlacement] = useState<TypicalLibraryPlacement | null>(null);
+  const [treeContextMenu, setTreeContextMenu] = useState<TreeContextMenuState>(null);
   const [validation, setValidation] = useState<TypicalValidationResult | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [validating, setValidating] = useState(false);
@@ -1100,6 +1153,18 @@ export default function App() {
     ],
   );
   const isDirty = savedSnapshot !== "" && currentSnapshot !== savedSnapshot;
+  const sortedLibraryNodes = useMemo(
+    () =>
+      [...libraryNodes].sort(
+        (left, right) => left.sort_order - right.sort_order || left.name.localeCompare(right.name),
+      ),
+    [libraryNodes],
+  );
+  const selectedPlacementNodes = useMemo(
+    () =>
+      sortedLibraryNodes.filter((node) => libraryPlacement?.library_node_ids.includes(node.id)),
+    [libraryPlacement, sortedLibraryNodes],
+  );
 
   function confirmDiscardChanges() {
     if (!isDirty) {
@@ -1111,7 +1176,7 @@ export default function App() {
   useEffect(() => {
     async function loadInitialData() {
       try {
-        const [healthResponse, classesResponse, typicalsResponse, presetsResponse] = await Promise.all([
+        const [healthResponse, classesResponse, typicalsResponse, presetsResponse, libraryNodesResponse] = await Promise.all([
           fetch(`${apiBaseUrl}/health`),
           fetch(
             `${apiBaseUrl}/api/v1/etim/classes?search=${encodeURIComponent(
@@ -1120,9 +1185,10 @@ export default function App() {
           ),
           fetch(`${apiBaseUrl}/api/v1/typicals`),
           fetch(`${apiBaseUrl}/api/v1/presets`),
+          fetch(`${apiBaseUrl}/api/v1/library/nodes`),
         ]);
 
-        if (!healthResponse.ok || !classesResponse.ok || !typicalsResponse.ok || !presetsResponse.ok) {
+        if (!healthResponse.ok || !classesResponse.ok || !typicalsResponse.ok || !presetsResponse.ok || !libraryNodesResponse.ok) {
           throw new Error("API bootstrap failed");
         }
 
@@ -1130,9 +1196,11 @@ export default function App() {
         const classesPayload = (await classesResponse.json()) as EtimClassSummary[];
         setClasses(classesPayload);
         setTypicals((await typicalsResponse.json()) as EquipmentTypical[]);
+        await refreshLibraryTree();
         setPresets(
           ((await presetsResponse.json()) as ParameterDefinitionPreset[]).map(hydratePresetBundle),
         );
+        setLibraryNodes((await libraryNodesResponse.json()) as LibraryNode[]);
         if (classesPayload.length > 0) {
           setSelectedClassId(classesPayload[0].id);
         }
@@ -1266,6 +1334,30 @@ export default function App() {
     }
   }
 
+  async function refreshLibraryTree() {
+    const response = await fetch(`${apiBaseUrl}/api/v1/typicals/library-tree`);
+    if (!response.ok) {
+      throw new Error("Typical bibliotheekboom laden mislukt");
+    }
+    setLibraryTree((await response.json()) as LibraryTreeNode[]);
+  }
+
+  async function refreshLibraryNodes() {
+    const response = await fetch(`${apiBaseUrl}/api/v1/library/nodes`);
+    if (!response.ok) {
+      throw new Error("Library nodes laden mislukt");
+    }
+    setLibraryNodes((await response.json()) as LibraryNode[]);
+  }
+
+  async function refreshTypicalPlacement(lineageId: string) {
+    const response = await fetch(`${apiBaseUrl}/api/v1/library/typicals/${lineageId}/placement`);
+    if (!response.ok) {
+      throw new Error("Typical placement laden mislukt");
+    }
+    setLibraryPlacement((await response.json()) as TypicalLibraryPlacement);
+  }
+
   async function refreshTypicalVersions(typicalId: string) {
     const response = await fetch(`${apiBaseUrl}/api/v1/typicals/${typicalId}/versions`);
     if (!response.ok) {
@@ -1288,6 +1380,256 @@ export default function App() {
         setSelectedPresetId(null);
       }
     }
+  }
+
+  async function createLibraryNode(args?: { name?: string; code?: string; parentId?: string | null }) {
+    const nextName = (args?.name ?? libraryNodeName).trim();
+    const nextCode = (args?.code ?? libraryNodeCode).trim();
+    const nextParentId =
+      args?.parentId !== undefined ? args.parentId : libraryNodeParentId || null;
+
+    if (!nextName || !nextCode) {
+      setError("Library node naam en code zijn verplicht.");
+      return;
+    }
+    setError(null);
+    setSuccessMessage(null);
+    const response = await fetch(`${apiBaseUrl}/api/v1/library/nodes`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        parent_id: nextParentId,
+        code: nextCode,
+        name: nextName,
+        node_type: "folder",
+        sort_order: 0,
+        is_active: true,
+      }),
+    });
+    if (!response.ok) {
+      let detail = "Library node aanmaken mislukt";
+      try {
+        const errorPayload = (await response.json()) as { detail?: string };
+        if (errorPayload.detail) detail = errorPayload.detail;
+      } catch {
+        undefined;
+      }
+      setError(detail);
+      return;
+    }
+    setLibraryNodeName("");
+    setLibraryNodeCode("");
+    setLibraryNodeParentId("");
+    await refreshLibraryNodes();
+    await refreshLibraryTree();
+    setSuccessMessage("Library node aangemaakt.");
+  }
+
+  async function handleCreateLibraryNode() {
+    await createLibraryNode();
+  }
+
+  async function handleDeleteLibraryNode(nodeId: string) {
+    if (!window.confirm("Wil je deze library node verwijderen?")) {
+      return;
+    }
+    setError(null);
+    setSuccessMessage(null);
+    const response = await fetch(`${apiBaseUrl}/api/v1/library/nodes/${nodeId}`, {
+      method: "DELETE",
+    });
+    if (!response.ok) {
+      setError("Library node verwijderen mislukt.");
+      return;
+    }
+    await refreshLibraryNodes();
+    await refreshLibraryTree();
+    if (selectedTypicalLineageId) {
+      await refreshTypicalPlacement(selectedTypicalLineageId);
+    }
+    setSuccessMessage("Library node verwijderd.");
+  }
+
+  async function handleRenameLibraryNode(node: LibraryNode) {
+    const nextName = window.prompt("Nieuwe naam voor de library node:", node.name)?.trim();
+    if (!nextName) {
+      return;
+    }
+    const nextCode = window.prompt("Nieuwe code voor de library node:", node.code)?.trim();
+    if (!nextCode) {
+      return;
+    }
+    setError(null);
+    setSuccessMessage(null);
+    const response = await fetch(`${apiBaseUrl}/api/v1/library/nodes/${node.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        parent_id: node.parent_id ?? null,
+        code: nextCode,
+        name: nextName,
+        node_type: node.node_type,
+        sort_order: node.sort_order,
+        is_active: node.is_active === 1,
+      }),
+    });
+    if (!response.ok) {
+      let detail = "Library node hernoemen mislukt";
+      try {
+        const errorPayload = (await response.json()) as { detail?: string };
+        if (errorPayload.detail) detail = errorPayload.detail;
+      } catch {
+        undefined;
+      }
+      setError(detail);
+      return;
+    }
+    await refreshLibraryNodes();
+    await refreshLibraryTree();
+    setSuccessMessage("Library node hernoemd.");
+  }
+
+  async function handleSaveTypicalPlacement() {
+    if (!selectedTypicalLineageId || !libraryPlacement) {
+      return;
+    }
+    setError(null);
+    setSuccessMessage(null);
+    const uniqueIds = Array.from(new Set(libraryPlacement.library_node_ids.filter(Boolean)));
+    const response = await fetch(
+      `${apiBaseUrl}/api/v1/library/typicals/${selectedTypicalLineageId}/placement`,
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          library_node_ids: uniqueIds,
+          primary_library_node_id:
+            libraryPlacement.primary_library_node_id &&
+            uniqueIds.includes(libraryPlacement.primary_library_node_id)
+              ? libraryPlacement.primary_library_node_id
+              : uniqueIds[0] ?? null,
+        }),
+      },
+    );
+    if (!response.ok) {
+      let detail = "Typical placement opslaan mislukt";
+      try {
+        const errorPayload = (await response.json()) as { detail?: string };
+        if (errorPayload.detail) detail = errorPayload.detail;
+      } catch {
+        undefined;
+      }
+      setError(detail);
+      return;
+    }
+    await refreshLibraryTree();
+    await refreshTypicalPlacement(selectedTypicalLineageId);
+    setSuccessMessage("Typical placement opgeslagen.");
+  }
+
+  async function handleDropTypicalToNode(args: { typicalLineageId: string; nodeId: string }) {
+    setError(null);
+    setSuccessMessage(null);
+    const response = await fetch(
+      `${apiBaseUrl}/api/v1/library/typicals/${args.typicalLineageId}/placement`,
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          library_node_ids: [args.nodeId],
+          primary_library_node_id: args.nodeId,
+        }),
+      },
+    );
+    if (!response.ok) {
+      let detail = "Typical verplaatsen in bibliotheekboom mislukt";
+      try {
+        const errorPayload = (await response.json()) as { detail?: string };
+        if (errorPayload.detail) detail = errorPayload.detail;
+      } catch {
+        undefined;
+      }
+      setError(detail);
+      return;
+    }
+    await refreshLibraryTree();
+    if (selectedTypicalLineageId === args.typicalLineageId) {
+      await refreshTypicalPlacement(args.typicalLineageId);
+    }
+    setSuccessMessage("Typical geplaatst onder geselecteerde library node.");
+  }
+
+  function togglePlacementNode(nodeId: string) {
+    setLibraryPlacement((current) => {
+      if (!current) return current;
+      const exists = current.library_node_ids.includes(nodeId);
+      const nextNodeIds = exists
+        ? current.library_node_ids.filter((id) => id !== nodeId)
+        : [...current.library_node_ids, nodeId];
+      const nextPrimary =
+        current.primary_library_node_id && nextNodeIds.includes(current.primary_library_node_id)
+          ? current.primary_library_node_id
+          : nextNodeIds[0] ?? null;
+      return { ...current, library_node_ids: nextNodeIds, primary_library_node_id: nextPrimary };
+    });
+  }
+
+  function handleTreeNodeContextMenu(node: LibraryTreeNode, event: MouseEvent) {
+    event.preventDefault();
+    setTreeContextMenu({
+      mouseX: event.clientX + 2,
+      mouseY: event.clientY - 6,
+      node,
+    });
+  }
+
+  function closeTreeContextMenu() {
+    setTreeContextMenu(null);
+  }
+
+  async function handleCreateSubnodeFromTree() {
+    const targetNode = treeContextMenu?.node;
+    closeTreeContextMenu();
+    if (!targetNode || targetNode.source !== "library") {
+      return;
+    }
+    const nextName = window.prompt("Naam van de subnode:");
+    if (!nextName?.trim()) {
+      return;
+    }
+    const defaultCode = slugify(nextName);
+    const nextCode = window.prompt("Code van de subnode:", defaultCode);
+    if (!nextCode?.trim()) {
+      return;
+    }
+    await createLibraryNode({
+      name: nextName,
+      code: nextCode,
+      parentId: targetNode.node_id,
+    });
+  }
+
+  async function handleRenameNodeFromTree() {
+    const targetNode = treeContextMenu?.node;
+    closeTreeContextMenu();
+    if (!targetNode || targetNode.source !== "library") {
+      return;
+    }
+    const libraryNode = libraryNodes.find((node) => node.id === targetNode.node_id);
+    if (!libraryNode) {
+      setError("Geselecteerde library node bestaat niet meer.");
+      return;
+    }
+    await handleRenameLibraryNode(libraryNode);
+  }
+
+  async function handleDeleteNodeFromTree() {
+    const targetNode = treeContextMenu?.node;
+    closeTreeContextMenu();
+    if (!targetNode || targetNode.source !== "library") {
+      return;
+    }
+    await handleDeleteLibraryNode(targetNode.node_id);
   }
 
   async function handleSavePreset(definition: GovernedParameterDefinition) {
@@ -1802,6 +2144,7 @@ export default function App() {
 
       const saved = (await response.json()) as EquipmentTypicalDetail;
       await refreshTypicals(saved.id);
+      await refreshLibraryTree();
       await refreshTypicalVersions(saved.id);
       setMode("edit");
       await handleEditTypical(saved.id, true);
@@ -2149,6 +2492,7 @@ export default function App() {
 
       const payload = (await response.json()) as EquipmentTypicalDetail;
       setSelectedTypicalId(payload.id);
+      setSelectedTypicalLineageId(payload.lineage_id ?? payload.id);
       setSelectedTypicalStatus(payload.status === "released" ? "released" : "draft");
       setSelectedTypicalVersion(payload.version);
       setMode("edit");
@@ -2250,6 +2594,7 @@ export default function App() {
         }),
       );
       await refreshTypicalVersions(payload.id);
+      await refreshTypicalPlacement(payload.lineage_id ?? payload.id);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unknown error");
     } finally {
@@ -2263,9 +2608,11 @@ export default function App() {
     }
     setMode("create");
     setSelectedTypicalId(null);
+    setSelectedTypicalLineageId(null);
     setSelectedTypicalStatus("draft");
     setSelectedTypicalVersion(1);
     setTypicalVersions([]);
+    setLibraryPlacement(null);
     setError(null);
     setSuccessMessage(null);
     if (selectedClass && classDetail) {
@@ -2347,6 +2694,7 @@ export default function App() {
       }
 
       setTypicals((current) => current.filter((item) => item.id !== typicalId));
+      await refreshLibraryTree();
       if (selectedTypicalId === typicalId) {
         handleNewTypical();
       }
@@ -2376,6 +2724,7 @@ export default function App() {
       }
       const saved = (await response.json()) as EquipmentTypicalDetail;
       await refreshTypicals(saved.id);
+      await refreshLibraryTree();
       await handleEditTypical(saved.id, true);
       setSuccessMessage("Typical gereleased.");
     } catch (err) {
@@ -2403,6 +2752,7 @@ export default function App() {
       }
       const created = (await response.json()) as EquipmentTypicalDetail;
       await refreshTypicals(created.id);
+      await refreshLibraryTree();
       await handleEditTypical(created.id, true);
       setSuccessMessage("Nieuwe draft aangemaakt vanuit released typical.");
     } catch (err) {
@@ -2540,7 +2890,7 @@ export default function App() {
       },
       {
         field: "default_value",
-        headerName: "Default",
+        headerName: "Instelwaarde",
         flex: 1,
         minWidth: 140,
         renderCell: (params: GridRenderCellParams) => {
@@ -3405,45 +3755,147 @@ export default function App() {
 
             <div>
               <h3>Opgeslagen typicals</h3>
-              <div className="list-panel">
-                {typicals.length === 0 ? (
-                  <p className="empty-state">Nog geen typicals opgeslagen.</p>
-                ) : (
-                  typicals.map((item) => (
-                    <article className="typical-card" key={item.id}>
-                      <div className="typical-card-body">
-                        <strong>{item.name}</strong>
-                        <small>{item.code}</small>
-                        <small>
-                          {item.etim_class_id} · {item.etim_class_description}
-                        </small>
-                        <small>
-                          {item.status} · v{item.version}
-                        </small>
-                      </div>
-                      <div className="typical-actions">
-                        <button
-                          className="secondary-button"
-                          onClick={() => handleEditTypical(item.id)}
-                          type="button"
-                        >
-                          {item.status === "released" ? "Bekijk" : "Bewerk"}
-                        </button>
-                        <button
-                          className="delete-button"
-                          disabled={item.status === "released"}
-                          onClick={() => handleDeleteTypical(item.id)}
-                          type="button"
-                        >
-                          Verwijder
-                        </button>
-                      </div>
-                    </article>
-                  ))
-                )}
+              {libraryTree.length === 0 ? (
+                <p className="empty-state">Nog geen typicals opgeslagen.</p>
+              ) : (
+                <TypicalLibraryTree
+                  nodes={libraryTree}
+                  onOpenTypical={(typicalId) => void handleEditTypical(typicalId)}
+                  onNodeContextMenu={handleTreeNodeContextMenu}
+                  onDropTypical={(args) => void handleDropTypicalToNode(args)}
+                />
+              )}
+            </div>
+
+            <div>
+              <h3>Bibliotheekstructuur</h3>
+              <div className="editor-panel">
+                <div className="definition-grid">
+                  <label className="field">
+                    <span>Naam</span>
+                    <input
+                      value={libraryNodeName}
+                      onChange={(event) => setLibraryNodeName(event.target.value)}
+                    />
+                  </label>
+                  <label className="field">
+                    <span>Code</span>
+                    <input
+                      value={libraryNodeCode}
+                      onChange={(event) => setLibraryNodeCode(event.target.value)}
+                    />
+                  </label>
+                  <label className="field">
+                    <span>Parent</span>
+                    <select
+                      value={libraryNodeParentId}
+                      onChange={(event) => setLibraryNodeParentId(event.target.value)}
+                    >
+                      <option value="">Root</option>
+                      {sortedLibraryNodes.map((node) => (
+                        <option key={node.id} value={node.id}>
+                          {node.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+                <div className="editor-actions">
+                  <button onClick={() => void handleCreateLibraryNode()} type="button">
+                    Voeg library node toe
+                  </button>
+                </div>
+                <div className="list-panel">
+                  {sortedLibraryNodes.length === 0 ? (
+                    <p className="empty-state">Nog geen eigen library nodes.</p>
+                  ) : (
+                    sortedLibraryNodes.map((node) => {
+                      const parent = sortedLibraryNodes.find((candidate) => candidate.id === node.parent_id);
+                      return (
+                        <article className="typical-card" key={node.id}>
+                          <div className="typical-card-body">
+                            <strong>{node.name}</strong>
+                            <small>{node.code}</small>
+                            <small>{parent ? `Parent: ${parent.name}` : "Root node"}</small>
+                          </div>
+                          <div className="typical-actions">
+                            <button
+                              className="delete-button"
+                              onClick={() => void handleDeleteLibraryNode(node.id)}
+                              type="button"
+                            >
+                              Verwijder
+                            </button>
+                          </div>
+                        </article>
+                      );
+                    })
+                  )}
+                </div>
               </div>
             </div>
           </div>
+
+          {mode === "edit" && selectedTypicalLineageId ? (
+            <div className="governance-panel">
+              <div className="editor-header">
+                <h3>Library placement</h3>
+                <small className="empty-state">
+                  Plaats de volledige typical-lineage in de bibliotheekboom.
+                </small>
+              </div>
+              {!libraryPlacement ? (
+                <p className="empty-state">Placement laden...</p>
+              ) : sortedLibraryNodes.length === 0 ? (
+                <p className="empty-state">Maak eerst library nodes aan.</p>
+              ) : (
+                <>
+                  <div className="placement-grid">
+                    {sortedLibraryNodes.map((node) => (
+                      <label className="feature-item" key={node.id}>
+                        <input
+                          type="checkbox"
+                          checked={libraryPlacement.library_node_ids.includes(node.id)}
+                          onChange={() => togglePlacementNode(node.id)}
+                        />
+                        <span>
+                          <strong>{node.name}</strong>
+                          <small>{node.code}</small>
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                  <div className="editor-panel">
+                    <label className="field">
+                      <span>Primaire node</span>
+                      <select
+                        value={libraryPlacement.primary_library_node_id ?? ""}
+                        onChange={(event) =>
+                          setLibraryPlacement((current) =>
+                            current
+                              ? { ...current, primary_library_node_id: event.target.value || null }
+                              : current,
+                          )
+                        }
+                      >
+                        <option value="">Geen</option>
+                        {selectedPlacementNodes.map((node) => (
+                          <option key={node.id} value={node.id}>
+                            {node.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <div className="editor-actions">
+                      <button onClick={() => void handleSaveTypicalPlacement()} type="button">
+                        Sla placement op
+                      </button>
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+          ) : null}
 
           <div className={`governance-panel${isReleasedTypical ? " read-only-panel" : ""}`}>
             <div className="editor-header">
@@ -3625,7 +4077,7 @@ export default function App() {
                     />
                   </label>
                   <label className="field">
-                    <span>Default</span>
+                    <span>Instelwaarde</span>
                     <input
                       value={presetDraft.default_value}
                       onChange={(event) =>
@@ -3870,6 +4322,35 @@ export default function App() {
           <ProjectWorkspace apiBaseUrl={apiBaseUrl} />
         </section>
       </section>
+      <Menu
+        open={treeContextMenu !== null}
+        onClose={closeTreeContextMenu}
+        anchorReference="anchorPosition"
+        anchorPosition={
+          treeContextMenu !== null
+            ? { top: treeContextMenu.mouseY, left: treeContextMenu.mouseX }
+            : undefined
+        }
+      >
+        <MenuItem
+          disabled={treeContextMenu?.node.source !== "library"}
+          onClick={() => void handleCreateSubnodeFromTree()}
+        >
+          Subnode toevoegen
+        </MenuItem>
+        <MenuItem
+          disabled={treeContextMenu?.node.source !== "library"}
+          onClick={() => void handleRenameNodeFromTree()}
+        >
+          Hernoemen
+        </MenuItem>
+        <MenuItem
+          disabled={treeContextMenu?.node.source !== "library"}
+          onClick={() => void handleDeleteNodeFromTree()}
+        >
+          Verwijderen
+        </MenuItem>
+      </Menu>
     </main>
   );
 }
