@@ -1,4 +1,5 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
+import { DataGrid, GridColDef, GridRenderCellParams } from "@mui/x-data-grid";
 
 type TypicalListItem = {
   id: string;
@@ -137,6 +138,8 @@ export default function ProjectWorkspace({ apiBaseUrl }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [validation, setValidation] = useState<InstanceValidationResult | null>(null);
+  const [isDirty, setIsDirty] = useState(false);
+  const [lastValidatedAt, setLastValidatedAt] = useState<string | null>(null);
 
   useEffect(() => {
     void refreshProjects();
@@ -204,6 +207,7 @@ export default function ProjectWorkspace({ apiBaseUrl }: Props) {
     }
     const payload = (await response.json()) as InstanceDetail;
     setSelectedInstance(payload);
+    setIsDirty(false);
     const classResponse = await fetch(`${apiBaseUrl}/api/v1/etim/classes/${payload.etim_class_id}`);
     if (classResponse.ok) {
       setEtimClassDetail((await classResponse.json()) as EtimClassDetail);
@@ -321,6 +325,7 @@ export default function ProjectWorkspace({ apiBaseUrl }: Props) {
   }
 
   function updateSelection(parameterCode: string, value: string) {
+    setIsDirty(true);
     setSelectedInstance((current) =>
       current
         ? {
@@ -336,6 +341,7 @@ export default function ProjectWorkspace({ apiBaseUrl }: Props) {
   }
 
   function updateDefinitionVisibility(parameterCode: string, visibility: string) {
+    setIsDirty(true);
     setSelectedInstance((current) =>
       current
         ? {
@@ -348,12 +354,88 @@ export default function ProjectWorkspace({ apiBaseUrl }: Props) {
     );
   }
 
+  function updateProjectDefinition(
+    parameterCode: string,
+    updates: Partial<InstanceDetail["parameter_definition_snapshots"][number]>,
+  ) {
+    setIsDirty(true);
+    setSelectedInstance((current) =>
+      current
+        ? {
+            ...current,
+            parameter_definition_snapshots: current.parameter_definition_snapshots.map((definition) =>
+              definition.parameter_code === parameterCode ? { ...definition, ...updates } : definition,
+            ),
+            parameter_selections: updates.parameter_name
+              ? current.parameter_selections.map((selection) =>
+                  selection.parameter_code === parameterCode
+                    ? { ...selection, parameter_name: updates.parameter_name ?? selection.parameter_name }
+                    : selection,
+                )
+              : current.parameter_selections,
+          }
+        : current,
+    );
+  }
+
+  function removeProjectParameter(parameterCode: string) {
+    setError(null);
+    setIsDirty(true);
+    setSelectedInstance((current) =>
+      current
+        ? {
+            ...current,
+            parameter_definition_snapshots: current.parameter_definition_snapshots.filter(
+              (definition) => definition.parameter_code !== parameterCode,
+            ),
+            parameter_selections: current.parameter_selections.filter(
+              (selection) => selection.parameter_code !== parameterCode,
+            ),
+          }
+        : current,
+    );
+    setSuccessMessage("Projectparameter verwijderd uit de instance.");
+  }
+
+  function formatAllowedValues(value: string[]) {
+    return value.join(", ");
+  }
+
+  function renderParameterValueControl(
+    definition: InstanceDetail["parameter_definition_snapshots"][number],
+    currentValue: string,
+  ) {
+    const isSelect = definition.allowed_values.length > 0;
+    if (isSelect) {
+      return (
+        <select
+          value={currentValue}
+          onChange={(event) => updateSelection(definition.parameter_code, event.target.value)}
+        >
+          <option value="">Selecteer waarde</option>
+          {definition.allowed_values.map((value) => (
+            <option key={value} value={value}>
+              {value}
+            </option>
+          ))}
+        </select>
+      );
+    }
+    return (
+      <input
+        value={currentValue}
+        onChange={(event) => updateSelection(definition.parameter_code, event.target.value)}
+      />
+    );
+  }
+
   function addProjectParameter() {
     if (!projectParameterName.trim() || !projectParameterCode.trim()) {
       setError("Projectparameter naam en code zijn verplicht.");
       return;
     }
     setError(null);
+    setIsDirty(true);
     const allowedValues = projectParameterAllowedValues
       .split(",")
       .map((item) => item.trim())
@@ -492,6 +574,7 @@ export default function ProjectWorkspace({ apiBaseUrl }: Props) {
           }
         : current,
     );
+    setIsDirty(true);
     setSelectedEtimFeatureNr("");
     setError(null);
     setSuccessMessage("ETIM-feature toegevoegd aan de instance.");
@@ -509,6 +592,7 @@ export default function ProjectWorkspace({ apiBaseUrl }: Props) {
       return;
     }
     setValidation((await response.json()) as InstanceValidationResult);
+    setLastValidatedAt(new Date().toLocaleString("nl-BE"));
   }
 
   async function handleSaveInstance() {
@@ -550,6 +634,7 @@ export default function ProjectWorkspace({ apiBaseUrl }: Props) {
     }
     const saved = (await response.json()) as InstanceDetail;
     setSelectedInstance(saved);
+    setIsDirty(false);
     if (selectedProjectId) {
       await refreshInstances(selectedProjectId);
     }
@@ -623,27 +708,85 @@ export default function ProjectWorkspace({ apiBaseUrl }: Props) {
     const definitionByCode = Object.fromEntries(
       selectedInstance.parameter_definition_snapshots.map((item) => [item.parameter_code, item.parameter_name]),
     );
-    const counts = new Map<string, number>();
+    const stats = new Map<string, { count: number; groups: Set<string> }>();
     for (const rule of selectedInstance.interface_mapping_rule_snapshots) {
       if (!activeCodes.has(rule.driver_parameter_code)) {
         continue;
       }
       if ((selectionByCode[rule.driver_parameter_code] ?? "") === rule.driver_value) {
-        counts.set(rule.driver_parameter_code, (counts.get(rule.driver_parameter_code) ?? 0) + 1);
+        const current = stats.get(rule.driver_parameter_code) ?? { count: 0, groups: new Set<string>() };
+        current.count += 1;
+        current.groups.add(rule.group_code ?? "zonder_groep");
+        stats.set(rule.driver_parameter_code, current);
       }
     }
-    return [...counts.entries()].map(([code, count]) => ({
+    return [...stats.entries()].map(([code, stat]) => ({
+      id: code,
       code,
       name: definitionByCode[code] ?? code,
-      count,
+      count: stat.count,
       selectedValue: selectionByCode[code] ?? "",
+      groups: [...stat.groups].join(", "),
     }));
   }, [selectedInstance]);
 
-  const activeDefinitions = useMemo(
+  const interfaceRows = useMemo(() => {
+    if (!selectedInstance) return [];
+    const selectionByCode = Object.fromEntries(
+      selectedInstance.parameter_selections.map((item) => [item.parameter_code, item.selected_value ?? ""]),
+    );
+    const definitionByCode = Object.fromEntries(
+      selectedInstance.parameter_definition_snapshots.map((item) => [item.parameter_code, item.parameter_name]),
+    );
+    const activeCodes = new Set(
+      selectedInstance.parameter_definition_snapshots
+        .filter((item) => item.visibility === "active")
+        .map((item) => item.parameter_code),
+    );
+    return selectedInstance.interfaces.map((item) => {
+      const matchingRules = selectedInstance.interface_mapping_rule_snapshots.filter(
+        (rule) =>
+          activeCodes.has(rule.driver_parameter_code) &&
+          rule.interface_code === item.code &&
+          (rule.group_code ?? "zonder_groep") === (item.group_code ?? "zonder_groep") &&
+          (selectionByCode[rule.driver_parameter_code] ?? "") === rule.driver_value,
+      );
+      const derivedBy =
+        matchingRules.length > 0
+          ? matchingRules
+              .map((rule) => `${definitionByCode[rule.driver_parameter_code] ?? rule.driver_parameter_code}=${rule.driver_value}`)
+              .join(" | ")
+          : "derived";
+      return {
+        ...item,
+        group_label: item.group_code ?? "zonder_groep",
+        derived_by: derivedBy,
+      };
+    });
+  }, [selectedInstance]);
+
+  const validationRows = useMemo(
+    () =>
+      (validation?.issues ?? []).map((issue, index) => ({
+        id: `${issue.code}-${index}`,
+        ...issue,
+        parameter_label:
+          issue.parameter_name || issue.parameter_code
+            ? `${issue.parameter_name ?? issue.parameter_code}${issue.parameter_name && issue.parameter_code ? ` · ${issue.parameter_code}` : ""}`
+            : "",
+      })),
+    [validation],
+  );
+
+  const inheritedDefinitions = useMemo(
     () =>
       (selectedInstance?.parameter_definition_snapshots ?? [])
-        .filter((definition) => definition.visibility === "active" && definition.origin !== "instance_added")
+        .filter(
+          (definition) =>
+            definition.visibility === "active" &&
+            definition.origin !== "instance_added" &&
+            definition.origin !== "project_etim_added",
+        )
         .sort((left, right) => left.sort_order - right.sort_order),
     [selectedInstance],
   );
@@ -654,14 +797,19 @@ export default function ProjectWorkspace({ apiBaseUrl }: Props) {
         .sort((left, right) => left.sort_order - right.sort_order),
     [selectedInstance],
   );
-  const projectDefinitions = useMemo(
+  const etimProjectDefinitions = useMemo(
     () =>
       (selectedInstance?.parameter_definition_snapshots ?? [])
         .filter(
-          (definition) =>
-            (definition.origin === "instance_added" || definition.origin === "project_etim_added") &&
-            definition.visibility === "active",
+          (definition) => definition.origin === "project_etim_added" && definition.visibility === "active",
         )
+        .sort((left, right) => left.sort_order - right.sort_order),
+    [selectedInstance],
+  );
+  const localProjectDefinitions = useMemo(
+    () =>
+      (selectedInstance?.parameter_definition_snapshots ?? [])
+        .filter((definition) => definition.origin === "instance_added" && definition.visibility === "active")
         .sort((left, right) => left.sort_order - right.sort_order),
     [selectedInstance],
   );
@@ -676,6 +824,299 @@ export default function ProjectWorkspace({ apiBaseUrl }: Props) {
       (feature) => !existingCodes.has(feature.feature_id.toLowerCase()),
     );
   }, [etimClassDetail, selectedInstance]);
+
+  const activeDriverColumns = useMemo<GridColDef[]>(
+    () => [
+      { field: "name", headerName: "Driver", flex: 1.2, minWidth: 220 },
+      { field: "code", headerName: "Code", minWidth: 160 },
+      { field: "selectedValue", headerName: "Selected value", minWidth: 150 },
+      { field: "count", headerName: "Active rules", minWidth: 120, type: "number" },
+      { field: "groups", headerName: "Groups", flex: 1, minWidth: 220 },
+    ],
+    [],
+  );
+
+  const interfaceColumns = useMemo<GridColDef[]>(
+    () => [
+      { field: "group_label", headerName: "Group", minWidth: 170 },
+      { field: "code", headerName: "Code", minWidth: 140 },
+      { field: "role", headerName: "Role", minWidth: 160 },
+      { field: "logical_type", headerName: "Type", minWidth: 120 },
+      { field: "direction", headerName: "Direction", minWidth: 110 },
+      { field: "derived_by", headerName: "Derived by", flex: 1.2, minWidth: 260 },
+    ],
+    [],
+  );
+
+  const validationColumns = useMemo<GridColDef[]>(
+    () => [
+      { field: "severity", headerName: "Severity", minWidth: 120 },
+      { field: "code", headerName: "Code", minWidth: 220 },
+      { field: "message", headerName: "Message", flex: 1.4, minWidth: 320 },
+      { field: "parameter_label", headerName: "Parameter", flex: 1, minWidth: 220 },
+    ],
+    [],
+  );
+
+  const validationSummary = useMemo(() => {
+    const issues = validation?.issues ?? [];
+    return {
+      errors: issues.filter((issue) => issue.severity === "error").length,
+      warnings: issues.filter((issue) => issue.severity !== "error").length,
+    };
+  }, [validation]);
+
+  const inheritedColumns = useMemo<GridColDef[]>(
+    () => [
+      {
+        field: "parameter_name",
+        headerName: "Parameter",
+        flex: 1.4,
+        minWidth: 220,
+        renderCell: (params: GridRenderCellParams) => (
+          <div>
+            <strong>{params.row.parameter_name}{params.row.required === 1 ? " *" : ""}</strong>
+            <div className="grid-subtext">
+              {params.row.parameter_code}
+              {params.row.unit ? ` · ${params.row.unit}` : ""}
+            </div>
+          </div>
+        ),
+      },
+      {
+        field: "input_type",
+        headerName: "Type",
+        minWidth: 140,
+      },
+      {
+        field: "allowed_values",
+        headerName: "Toegelaten waarden",
+        flex: 1,
+        minWidth: 220,
+        renderCell: (params: GridRenderCellParams) => (
+          <span>{formatAllowedValues(params.row.allowed_values)}</span>
+        ),
+      },
+      {
+        field: "selected_value",
+        headerName: "Instelwaarde",
+        flex: 1,
+        minWidth: 180,
+        sortable: false,
+        renderCell: (params: GridRenderCellParams) =>
+          renderParameterValueControl(params.row, selectionMap[params.row.parameter_code] ?? ""),
+      },
+      {
+        field: "actions",
+        headerName: "Actie",
+        minWidth: 170,
+        sortable: false,
+        renderCell: (params: GridRenderCellParams) => (
+          <button
+            className="secondary-button"
+            onClick={() => updateDefinitionVisibility(params.row.parameter_code, "suppressed")}
+            type="button"
+          >
+            Verberg
+          </button>
+        ),
+      },
+    ],
+    [selectionMap],
+  );
+
+  const etimProjectColumns = useMemo<GridColDef[]>(
+    () => [
+      {
+        field: "parameter_name",
+        headerName: "ETIM-feature",
+        flex: 1.3,
+        minWidth: 220,
+        renderCell: (params: GridRenderCellParams) => (
+          <div>
+            <strong>{params.row.parameter_name}</strong>
+            <div className="grid-subtext">
+              {params.row.parameter_code}
+              {params.row.unit ? ` · ${params.row.unit}` : ""}
+            </div>
+          </div>
+        ),
+      },
+      {
+        field: "input_type",
+        headerName: "Type",
+        minWidth: 140,
+      },
+      {
+        field: "allowed_values",
+        headerName: "Toegelaten waarden",
+        flex: 1,
+        minWidth: 220,
+        renderCell: (params: GridRenderCellParams) => (
+          <span>{formatAllowedValues(params.row.allowed_values)}</span>
+        ),
+      },
+      {
+        field: "selected_value",
+        headerName: "Instelwaarde",
+        flex: 1,
+        minWidth: 180,
+        sortable: false,
+        renderCell: (params: GridRenderCellParams) =>
+          renderParameterValueControl(params.row, selectionMap[params.row.parameter_code] ?? ""),
+      },
+      {
+        field: "actions",
+        headerName: "Actie",
+        minWidth: 210,
+        sortable: false,
+        renderCell: (params: GridRenderCellParams) => (
+          <button
+            className="delete-button"
+            onClick={() => removeProjectParameter(params.row.parameter_code)}
+            type="button"
+          >
+            Verwijder ETIM-parameter
+          </button>
+        ),
+      },
+    ],
+    [selectionMap],
+  );
+
+  const localProjectColumns = useMemo<GridColDef[]>(
+    () => [
+      {
+        field: "parameter_name",
+        headerName: "Naam",
+        flex: 1.1,
+        minWidth: 190,
+        sortable: false,
+        renderCell: (params: GridRenderCellParams) => (
+          <input
+            className="grid-input"
+            value={params.row.parameter_name}
+            onChange={(event) =>
+              updateProjectDefinition(params.row.parameter_code, {
+                parameter_name: event.target.value,
+              })
+            }
+          />
+        ),
+      },
+      {
+        field: "parameter_code",
+        headerName: "Code",
+        minWidth: 150,
+      },
+      {
+        field: "input_type",
+        headerName: "Type",
+        minWidth: 150,
+        sortable: false,
+        renderCell: (params: GridRenderCellParams) => (
+          <select
+            className="grid-input"
+            value={params.row.input_type}
+            onChange={(event) =>
+              updateProjectDefinition(params.row.parameter_code, {
+                input_type: event.target.value,
+              })
+            }
+          >
+            <option value="enum">enum</option>
+            <option value="managed_numeric">managed_numeric</option>
+            <option value="boolean">boolean</option>
+            <option value="managed_value">managed_value</option>
+          </select>
+        ),
+      },
+      {
+        field: "allowed_values",
+        headerName: "Allowed values",
+        flex: 1,
+        minWidth: 220,
+        sortable: false,
+        renderCell: (params: GridRenderCellParams) => (
+          <input
+            className="grid-input"
+            value={formatAllowedValues(params.row.allowed_values)}
+            onChange={(event) =>
+              updateProjectDefinition(params.row.parameter_code, {
+                allowed_values: event.target.value
+                  .split(",")
+                  .map((item) => item.trim())
+                  .filter(Boolean),
+              })
+            }
+          />
+        ),
+      },
+      {
+        field: "selected_value",
+        headerName: "Instelwaarde",
+        flex: 1,
+        minWidth: 180,
+        sortable: false,
+        renderCell: (params: GridRenderCellParams) =>
+          renderParameterValueControl(params.row, selectionMap[params.row.parameter_code] ?? ""),
+      },
+      {
+        field: "actions",
+        headerName: "Actie",
+        minWidth: 210,
+        sortable: false,
+        renderCell: (params: GridRenderCellParams) => (
+          <button
+            className="delete-button"
+            onClick={() => removeProjectParameter(params.row.parameter_code)}
+            type="button"
+          >
+            Verwijder projectparameter
+          </button>
+        ),
+      },
+    ],
+    [selectionMap],
+  );
+
+  const suppressedColumns = useMemo<GridColDef[]>(
+    () => [
+      {
+        field: "parameter_name",
+        headerName: "Parameter",
+        flex: 1.2,
+        minWidth: 220,
+        renderCell: (params: GridRenderCellParams) => (
+          <div>
+            <strong>{params.row.parameter_name}</strong>
+            <div className="grid-subtext">{params.row.parameter_code}</div>
+          </div>
+        ),
+      },
+      {
+        field: "origin",
+        headerName: "Bron",
+        minWidth: 140,
+      },
+      {
+        field: "actions",
+        headerName: "Actie",
+        minWidth: 150,
+        sortable: false,
+        renderCell: (params: GridRenderCellParams) => (
+          <button
+            className="secondary-button"
+            onClick={() => updateDefinitionVisibility(params.row.parameter_code, "active")}
+            type="button"
+          >
+            Herstel
+          </button>
+        ),
+      },
+    ],
+    [],
+  );
 
   return (
     <section className="roadmap-card">
@@ -872,15 +1313,38 @@ export default function ProjectWorkspace({ apiBaseUrl }: Props) {
             </small>
           </div>
 
+          <div className="instance-status-grid">
+            <article className="status-card compact-status">
+              <span className="label">Save state</span>
+              <strong>{isDirty ? "Unsaved changes" : "Saved"}</strong>
+            </article>
+            <article className="status-card compact-status">
+              <span className="label">Validation</span>
+              <strong>
+                {validation
+                  ? validationSummary.errors > 0
+                    ? `${validationSummary.errors} errors`
+                    : validationSummary.warnings > 0
+                      ? `${validationSummary.warnings} warnings`
+                      : "OK"
+                  : "Not validated"}
+              </strong>
+              <small>{lastValidatedAt ?? "No recent validation"}</small>
+            </article>
+          </div>
+
           <div className="definition-grid">
             <label className="field">
               <span>Naam</span>
               <input
                 value={selectedInstance.name}
                 onChange={(event) =>
-                  setSelectedInstance((current) =>
-                    current ? { ...current, name: event.target.value } : current,
-                  )
+                  {
+                    setIsDirty(true);
+                    setSelectedInstance((current) =>
+                      current ? { ...current, name: event.target.value } : current,
+                    );
+                  }
                 }
               />
             </label>
@@ -889,62 +1353,53 @@ export default function ProjectWorkspace({ apiBaseUrl }: Props) {
               <input
                 value={selectedInstance.tag}
                 onChange={(event) =>
-                  setSelectedInstance((current) =>
-                    current ? { ...current, tag: event.target.value } : current,
-                  )
+                  {
+                    setIsDirty(true);
+                    setSelectedInstance((current) =>
+                      current ? { ...current, tag: event.target.value } : current,
+                    );
+                  }
                 }
               />
             </label>
           </div>
 
-          <h3>Standaardparameters</h3>
-          <div className="definition-grid">
-            {activeDefinitions.map((definition) => {
-              const currentValue = selectionMap[definition.parameter_code] ?? "";
-              const isSelect = definition.allowed_values.length > 0;
-              return (
-                <div className="editor-panel" key={definition.id}>
-                  <label className="field">
-                    <span>
-                      {definition.parameter_name || definition.parameter_code}
-                      {definition.required === 1 ? " *" : ""}
-                    </span>
-                    <small className="helper-text">{definition.parameter_code}</small>
-                    {isSelect ? (
-                      <select
-                        value={currentValue}
-                        onChange={(event) => updateSelection(definition.parameter_code, event.target.value)}
-                      >
-                        <option value="">Selecteer waarde</option>
-                        {definition.allowed_values.map((value) => (
-                          <option key={value} value={value}>
-                            {value}
-                          </option>
-                        ))}
-                      </select>
-                    ) : (
-                      <input
-                        value={currentValue}
-                        onChange={(event) => updateSelection(definition.parameter_code, event.target.value)}
-                      />
-                    )}
-                  </label>
-                  <div className="editor-actions">
-                    <button
-                      className="secondary-button"
-                      onClick={() => updateDefinitionVisibility(definition.parameter_code, "suppressed")}
-                      type="button"
-                    >
-                      Verberg in project
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
+          <div className="parameter-section">
+            <div className="section-heading">
+              <div>
+                <h3>Standaardparameters ({inheritedDefinitions.length})</h3>
+                <p className="section-caption">
+                  Parameters uit de released typical. Je kunt de instelwaarde kiezen of de parameter verbergen in dit project.
+                </p>
+              </div>
+            </div>
+            <div className="data-grid-shell">
+            {inheritedDefinitions.length === 0 ? (
+              <p className="empty-state">Geen actieve standaardparameters.</p>
+            ) : (
+              <DataGrid
+                autoHeight
+                disableColumnMenu
+                disableRowSelectionOnClick
+                hideFooter
+                rowHeight={72}
+                rows={inheritedDefinitions}
+                columns={inheritedColumns}
+              />
+            )}
+          </div>
           </div>
 
-          <h3>Projectparameters</h3>
-          <div className="editor-panel">
+          <div className="parameter-section">
+            <div className="section-heading">
+              <div>
+                <h3>ETIM-projectparameters ({etimProjectDefinitions.length})</h3>
+                <p className="section-caption">
+                  Extra features uit dezelfde ETIM-klasse die niet in de baseline-typical zaten.
+                </p>
+              </div>
+            </div>
+            <div className="editor-panel">
             <div className="definition-grid">
               <label className="field">
                 <span>Voeg ETIM-feature toe</span>
@@ -972,8 +1427,33 @@ export default function ProjectWorkspace({ apiBaseUrl }: Props) {
               </button>
             </div>
           </div>
+          <div className="data-grid-shell">
+            {etimProjectDefinitions.length === 0 ? (
+              <p className="empty-state">Nog geen extra ETIM-projectparameters.</p>
+            ) : (
+              <DataGrid
+                autoHeight
+                disableColumnMenu
+                disableRowSelectionOnClick
+                hideFooter
+                rowHeight={72}
+                rows={etimProjectDefinitions}
+                columns={etimProjectColumns}
+              />
+            )}
+          </div>
+          </div>
 
-          <div className="editor-panel">
+          <div className="parameter-section">
+            <div className="section-heading">
+              <div>
+                <h3>Vrije projectparameters ({localProjectDefinitions.length})</h3>
+                <p className="section-caption">
+                  Projectspecifieke parameters die niet uit de typical of ETIM-class komen.
+                </p>
+              </div>
+            </div>
+            <div className="editor-panel">
             <div className="definition-grid">
               <label className="field">
                 <span>Naam</span>
@@ -1015,140 +1495,128 @@ export default function ProjectWorkspace({ apiBaseUrl }: Props) {
               </button>
             </div>
           </div>
-
-          <div className="definition-grid">
-            {projectDefinitions.map((definition) => {
-              const currentValue = selectionMap[definition.parameter_code] ?? "";
-              const isSelect = definition.allowed_values.length > 0;
-              return (
-                <div className="editor-panel" key={definition.id}>
-                  <label className="field">
-                    <span>{definition.parameter_name || definition.parameter_code}</span>
-                    <small className="helper-text">
-                      {definition.parameter_code} ·{" "}
-                      {definition.origin === "project_etim_added"
-                        ? "ETIM projectparameter"
-                        : "vrije projectparameter"}
-                    </small>
-                    {isSelect ? (
-                      <select
-                        value={currentValue}
-                        onChange={(event) => updateSelection(definition.parameter_code, event.target.value)}
-                      >
-                        <option value="">Selecteer waarde</option>
-                        {definition.allowed_values.map((value) => (
-                          <option key={value} value={value}>
-                            {value}
-                          </option>
-                        ))}
-                      </select>
-                    ) : (
-                      <input
-                        value={currentValue}
-                        onChange={(event) => updateSelection(definition.parameter_code, event.target.value)}
-                      />
-                    )}
-                  </label>
-                </div>
-              );
-            })}
+          <div className="data-grid-shell">
+            {localProjectDefinitions.length === 0 ? (
+              <p className="empty-state">Nog geen vrije projectparameters.</p>
+            ) : (
+              <DataGrid
+                autoHeight
+                disableColumnMenu
+                disableRowSelectionOnClick
+                hideFooter
+                rowHeight={72}
+                rows={localProjectDefinitions}
+                columns={localProjectColumns}
+              />
+            )}
+          </div>
           </div>
 
-          <h3>Verborgen parameters</h3>
-          <div className="list-panel">
+          <div className="parameter-section">
+            <div className="section-heading">
+              <div>
+                <h3>Verborgen parameters ({suppressedDefinitions.length})</h3>
+                <p className="section-caption">
+                  Inherited parameters die in dit project tijdelijk niet gebruikt worden.
+                </p>
+              </div>
+            </div>
+          <div className="data-grid-shell">
             {suppressedDefinitions.length === 0 ? (
               <p className="empty-state">Geen verborgen parameters.</p>
             ) : (
-              suppressedDefinitions.map((definition) => (
-                <article className="typical-card" key={definition.id}>
-                  <div className="typical-card-body">
-                    <strong>{definition.parameter_name}</strong>
-                    <small>{definition.parameter_code}</small>
-                  </div>
-                  <div className="typical-actions">
-                    <button
-                      className="secondary-button"
-                      onClick={() => updateDefinitionVisibility(definition.parameter_code, "active")}
-                      type="button"
-                    >
-                      Herstel
-                    </button>
-                  </div>
-                </article>
-              ))
+              <DataGrid
+                autoHeight
+                disableColumnMenu
+                disableRowSelectionOnClick
+                hideFooter
+                rowHeight={64}
+                rows={suppressedDefinitions}
+                columns={suppressedColumns}
+              />
             )}
           </div>
+          </div>
 
-          <h3>Actieve drivers</h3>
-          <div className="list-panel">
+          <div className="parameter-section">
+            <div className="section-heading">
+              <div>
+                <h3>Active drivers ({activeDrivers.length})</h3>
+                <p className="section-caption">
+                  Drivers with a matching selected value that currently activate interface rules.
+                </p>
+              </div>
+            </div>
+          <div className="data-grid-shell">
             {activeDrivers.length === 0 ? (
               <p className="empty-state">Nog geen actieve drivers voor interface-afleiding.</p>
             ) : (
-              activeDrivers.map((driver) => (
-                <article className="list-item" key={driver.code}>
-                  <span>
-                    <strong>{driver.name}</strong>
-                    <small>
-                      {driver.code} · waarde {driver.selectedValue} · {driver.count} interface-regels actief
-                    </small>
-                  </span>
-                </article>
-              ))
+              <DataGrid
+                autoHeight
+                disableColumnMenu
+                disableRowSelectionOnClick
+                hideFooter
+                rowHeight={64}
+                rows={activeDrivers}
+                columns={activeDriverColumns}
+              />
             )}
           </div>
+          </div>
 
-          <h3>Interfaces</h3>
-          <div className="list-panel">
-            {groupedInterfaces.length === 0 ? (
+          <div className="parameter-section">
+            <div className="section-heading">
+              <div>
+                <h3>Interfaces ({interfaceRows.length})</h3>
+                <p className="section-caption">
+                  Concrete interfaces derived from the current instance parameter selections.
+                </p>
+              </div>
+            </div>
+          <div className="data-grid-shell">
+            {interfaceRows.length === 0 ? (
               <p className="empty-state">Nog geen afgeleide interfaces voor deze selectie.</p>
             ) : (
-              groupedInterfaces.map(([groupCode, items]) => (
-                <div className="editor-panel" key={groupCode}>
-                  <div className="editor-header">
-                    <h3>{groupCode === "zonder_groep" ? "Zonder groep" : groupCode}</h3>
-                    <small className="empty-state">{items.length} interfaces</small>
-                  </div>
-                  <div className="list-panel">
-                    {items.map((item) => (
-                      <article className="list-item" key={item.id}>
-                        <span>
-                          <strong>{item.code}</strong>
-                          <small>
-                            {item.role} · {item.logical_type} · {item.direction}
-                          </small>
-                        </span>
-                      </article>
-                    ))}
-                  </div>
-                </div>
-              ))
+              <DataGrid
+                autoHeight
+                disableColumnMenu
+                disableRowSelectionOnClick
+                hideFooter
+                rowHeight={64}
+                rows={interfaceRows}
+                columns={interfaceColumns}
+              />
             )}
           </div>
+          </div>
 
-          <h3>Validatie</h3>
+          <div className="parameter-section">
+            <div className="section-heading">
+              <div>
+                <h3>Validation</h3>
+                <p className="section-caption">
+                  Errors and warnings for the current instance configuration.
+                </p>
+              </div>
+            </div>
           {!validation ? (
             <p className="empty-state">Nog geen instance-validatie uitgevoerd.</p>
           ) : validation.issues.length === 0 ? (
             <p className="validation-success">Geen validatieproblemen gevonden.</p>
           ) : (
-            <div className="validation-list">
-              {validation.issues.map((issue, index) => (
-                <article
-                  className={issue.severity === "error" ? "validation-item error" : "validation-item warning"}
-                  key={`${issue.code}-${index}`}
-                >
-                  <strong>{issue.severity === "error" ? "Error" : "Warning"}</strong>
-                  <p>{issue.message}</p>
-                  {issue.parameter_name || issue.parameter_code ? (
-                    <small>
-                      {(issue.parameter_name ?? issue.parameter_code) || ""}
-                      {issue.parameter_name && issue.parameter_code ? ` · ${issue.parameter_code}` : ""}
-                    </small>
-                  ) : null}
-                </article>
-              ))}
+            <div className="data-grid-shell">
+              <DataGrid
+                autoHeight
+                disableColumnMenu
+                disableRowSelectionOnClick
+                hideFooter
+                rowHeight={64}
+                rows={validationRows}
+                columns={validationColumns}
+              />
             </div>
           )}
+          </div>
 
           <div className="editor-actions">
             <button onClick={() => void handleSaveInstance()} type="button">
