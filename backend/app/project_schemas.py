@@ -32,17 +32,85 @@ class ProjectListItem(ProjectRead):
     instance_count: int = 0
 
 
+class CabinetInstanceCreate(BaseModel):
+    parent_cabinet_id: str | None = None
+    name: str
+    tag: str
+    description: str | None = None
+    cabinet_kind: str | None = None
+    status: str = "active"
+    sort_order: int = 0
+
+
+class CabinetInstanceUpdate(CabinetInstanceCreate):
+    pass
+
+
+class CabinetInstanceRead(BaseModel):
+    id: str
+    project_id: str
+    parent_cabinet_id: str | None = None
+    name: str
+    tag: str
+    description: str | None = None
+    cabinet_kind: str | None = None
+    status: str
+    sort_order: int
+    created_at: datetime
+    updated_at: datetime
+    equipment_instance_count: int = 0
+
+    class Config:
+        from_attributes = True
+
+
+class FieldObjectInstanceCreate(BaseModel):
+    parent_field_object_id: str | None = None
+    name: str
+    tag: str
+    description: str | None = None
+    field_object_kind: str | None = None
+    status: str = "active"
+    sort_order: int = 0
+
+
+class FieldObjectInstanceUpdate(FieldObjectInstanceCreate):
+    pass
+
+
+class FieldObjectInstanceRead(BaseModel):
+    id: str
+    project_id: str
+    parent_field_object_id: str | None = None
+    name: str
+    tag: str
+    description: str | None = None
+    field_object_kind: str | None = None
+    status: str
+    sort_order: int
+    created_at: datetime
+    updated_at: datetime
+    equipment_instance_count: int = 0
+
+    class Config:
+        from_attributes = True
+
+
 class InstanceCreate(BaseModel):
     name: str
     tag: str
     description: str | None = None
     released_typical_id: str
+    cabinet_instance_id: str | None = None
+    field_object_instance_id: str | None = None
 
 
 class InstanceUpdate(BaseModel):
     name: str
     tag: str
     description: str | None = None
+    cabinet_instance_id: str | None = None
+    field_object_instance_id: str | None = None
     parameter_definition_snapshots: list["InstanceParameterDefinitionSnapshotWrite"] = Field(default_factory=list)
     parameter_selections: list["InstanceParameterSelectionWrite"] = Field(default_factory=list)
 
@@ -63,6 +131,7 @@ class InstanceParameterDefinitionSnapshotWrite(BaseModel):
     required: bool = False
     is_parametrizable: bool = True
     drives_interfaces: bool = False
+    show_on_canvas: bool = False
     origin: str = "inherited"
     visibility: str = "active"
     sort_order: int = 0
@@ -80,6 +149,7 @@ class InstanceParameterDefinitionSnapshotRead(BaseModel):
     required: int
     is_parametrizable: int
     drives_interfaces: int
+    show_on_canvas: int
     origin: str
     visibility: str
     sort_order: int
@@ -152,6 +222,8 @@ class InstanceInterfaceRead(BaseModel):
     role: str
     logical_type: str
     direction: str
+    side: str | None = None
+    side_order: int
     source: str
     sort_order: int
 
@@ -164,6 +236,8 @@ class ProjectEquipmentInstanceListItem(BaseModel):
     name: str
     tag: str
     description: str | None = None
+    cabinet_instance_id: str | None = None
+    field_object_instance_id: str | None = None
     typical_id: str
     typical_lineage_id: str | None = None
     typical_version: int

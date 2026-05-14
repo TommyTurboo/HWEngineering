@@ -14,6 +14,7 @@ from app.models import (
     TypicalParameterDefinition,
 )
 from app.schemas import EquipmentTypicalCreate, EquipmentTypicalUpdate, TypicalValidationResult, ValidationIssue
+from app.schemas import TypicalDerivationParameterSelection, TypicalDerivationPreview
 
 
 SWITCH_TOPOLOGIES: dict[str, list[str]] = {
@@ -23,6 +24,58 @@ SWITCH_TOPOLOGIES: dict[str, list[str]] = {
     "3L+N": ["L1", "L2", "L3", "N"],
 }
 
+LAYOUT_SIDES = {"left", "right", "top", "bottom"}
+LEGACY_GROUP_SIDE_MAP = {
+    "line": "left",
+    "load": "right",
+    "primary": "left",
+    "secondary": "right",
+}
+DIRECTION_SIDE_MAP = {
+    "in": "left",
+    "out": "right",
+    "bidirectional": "bottom",
+}
+
+
+def normalize_layout_side(side: str | None) -> str | None:
+    normalized = (side or "").strip().lower()
+    if not normalized:
+        return None
+    if normalized in LAYOUT_SIDES:
+        return normalized
+    return LEGACY_GROUP_SIDE_MAP.get(normalized)
+
+
+def fallback_layout_side(direction: str, group_side: str | None = None) -> str:
+    return normalize_layout_side(group_side) or DIRECTION_SIDE_MAP.get(direction.strip().lower(), "bottom")
+
+
+def _group_side_by_code(groups: list[TypicalInterfaceGroup]) -> dict[str, str | None]:
+    return {group.code.strip().lower(): group.side for group in groups if group.code.strip()}
+
+
+def apply_interface_layout_defaults(
+    interfaces: list[TypicalInterface],
+    groups: list[TypicalInterfaceGroup],
+) -> list[TypicalInterface]:
+    group_side_by_code = _group_side_by_code(groups)
+    next_order_by_side: dict[str, int] = {}
+    for interface in sorted(interfaces, key=lambda item: (item.sort_order, item.code)):
+        group_side = group_side_by_code.get((interface.group_code or "").strip().lower())
+        resolved_side = normalize_layout_side(interface.side) or fallback_layout_side(interface.direction, group_side)
+        interface.side = resolved_side
+        next_side_order = next_order_by_side.get(resolved_side, 0)
+        if interface.source == "derived" and not getattr(interface, "_layout_override", False):
+            interface.side_order = next_side_order
+        elif interface.side_order < next_side_order:
+            interface.side_order = next_side_order
+        next_order_by_side[resolved_side] = max(
+            next_side_order,
+            interface.side_order + 1,
+        )
+    return sorted(interfaces, key=lambda item: (item.side or "", item.side_order, item.sort_order, item.code))
+
 
 def default_interface_groups(payload: EquipmentTypicalCreate) -> list[TypicalInterfaceGroup]:
     if payload.template_key == "multi_pole_switch_device":
@@ -31,7 +84,7 @@ def default_interface_groups(payload: EquipmentTypicalCreate) -> list[TypicalInt
                 code="input_power",
                 name="Input power",
                 category="power_input",
-                side="line",
+                side="left",
                 source="profile",
                 sort_order=0,
             ),
@@ -39,7 +92,7 @@ def default_interface_groups(payload: EquipmentTypicalCreate) -> list[TypicalInt
                 code="output_power",
                 name="Output power",
                 category="power_output",
-                side="load",
+                side="right",
                 source="profile",
                 sort_order=1,
             ),
@@ -51,7 +104,7 @@ def default_interface_groups(payload: EquipmentTypicalCreate) -> list[TypicalInt
                 code="input_power",
                 name="Input power",
                 category="power_input",
-                side="primary",
+                side="left",
                 source="profile",
                 sort_order=0,
             ),
@@ -59,7 +112,7 @@ def default_interface_groups(payload: EquipmentTypicalCreate) -> list[TypicalInt
                 code="output_power",
                 name="Output power",
                 category="power_output",
-                side="secondary",
+                side="right",
                 source="profile",
                 sort_order=1,
             ),
@@ -75,7 +128,7 @@ def build_interface_groups(payload: EquipmentTypicalCreate) -> list[TypicalInter
             code=group.code,
             name=group.name,
             category=group.category,
-            side=group.side,
+            side=normalize_layout_side(group.side) or group.side,
             source=group.source,
             bundle_id=group.bundle_id,
             sort_order=group.sort_order,
@@ -195,6 +248,8 @@ def derive_interfaces(payload: EquipmentTypicalCreate) -> list[TypicalInterface]
                         role=rule.role,
                         logical_type=rule.logical_type,
                         direction=rule.direction,
+                        side=None,
+                        side_order=rule.sort_order,
                         source="derived",
                         sort_order=rule.sort_order,
                     )
@@ -214,6 +269,8 @@ def derive_interfaces(payload: EquipmentTypicalCreate) -> list[TypicalInterface]
                     role="line_in",
                     logical_type="power",
                     direction="in",
+                    side=None,
+                    side_order=index,
                     source="derived",
                     sort_order=index * 2,
                 )
@@ -225,6 +282,8 @@ def derive_interfaces(payload: EquipmentTypicalCreate) -> list[TypicalInterface]
                     role="load_out",
                     logical_type="power",
                     direction="out",
+                    side=None,
+                    side_order=index,
                     source="derived",
                     sort_order=index * 2 + 1,
                 )
@@ -238,6 +297,8 @@ def derive_interfaces(payload: EquipmentTypicalCreate) -> list[TypicalInterface]
                     role="power_input",
                     logical_type="power",
                     direction="in",
+                    side=None,
+                    side_order=0,
                     source="derived",
                     sort_order=0,
                 ),
@@ -247,6 +308,8 @@ def derive_interfaces(payload: EquipmentTypicalCreate) -> list[TypicalInterface]
                     role="protective_earth",
                     logical_type="protective_earth",
                     direction="bidirectional",
+                    side=None,
+                    side_order=0,
                     source="derived",
                     sort_order=1,
                 ),
@@ -256,6 +319,8 @@ def derive_interfaces(payload: EquipmentTypicalCreate) -> list[TypicalInterface]
                     role="positive_output",
                     logical_type="power",
                     direction="out",
+                    side=None,
+                    side_order=0,
                     source="derived",
                     sort_order=2,
                 ),
@@ -265,6 +330,8 @@ def derive_interfaces(payload: EquipmentTypicalCreate) -> list[TypicalInterface]
                     role="return_output",
                     logical_type="power",
                     direction="out",
+                    side=None,
+                    side_order=1,
                     source="derived",
                     sort_order=3,
                 ),
@@ -277,9 +344,22 @@ def derive_interfaces(payload: EquipmentTypicalCreate) -> list[TypicalInterface]
 def build_interfaces(payload: EquipmentTypicalCreate) -> list[TypicalInterface]:
     disabled_codes = {code.strip().upper() for code in payload.disabled_interface_codes if code.strip()}
     derived_interfaces = derive_interfaces(payload)
+    derived_layout_overrides = {
+        interface.code.strip().upper(): interface
+        for interface in payload.interfaces
+        if interface.source != "override" and interface.code.strip()
+    }
     visible_derived = [
         interface for interface in derived_interfaces if interface.code.strip().upper() not in disabled_codes
     ]
+    for interface in visible_derived:
+        layout_override = derived_layout_overrides.get(interface.code.strip().upper())
+        if layout_override is None:
+            continue
+        interface.side = layout_override.side
+        interface.side_order = layout_override.side_order
+        interface.sort_order = layout_override.sort_order
+        setattr(interface, "_layout_override", True)
 
     override_interfaces = [
         TypicalInterface(
@@ -288,6 +368,8 @@ def build_interfaces(payload: EquipmentTypicalCreate) -> list[TypicalInterface]:
             role=interface.role,
             logical_type=interface.logical_type,
             direction=interface.direction,
+            side=interface.side,
+            side_order=interface.side_order,
             source="override",
             sort_order=interface.sort_order,
         )
@@ -296,7 +378,88 @@ def build_interfaces(payload: EquipmentTypicalCreate) -> list[TypicalInterface]:
     ]
 
     all_interfaces = visible_derived + override_interfaces
-    return sorted(all_interfaces, key=lambda interface: (interface.sort_order, interface.code))
+    return apply_interface_layout_defaults(all_interfaces, build_interface_groups(payload))
+
+
+def _payload_with_parameter_selections(
+    payload: EquipmentTypicalCreate,
+    parameter_selections: list[TypicalDerivationParameterSelection] | None,
+) -> EquipmentTypicalCreate:
+    if not parameter_selections:
+        return payload
+    selection_by_code = {
+        selection.parameter_code.strip().lower(): selection.selected_value
+        for selection in parameter_selections
+        if selection.parameter_code.strip()
+    }
+    if not selection_by_code:
+        return payload
+    definitions = [
+        definition.model_copy(
+            update={"default_value": selection_by_code.get(definition.code.strip().lower(), definition.default_value)}
+        )
+        for definition in payload.parameter_definitions
+    ]
+    parameters = [
+        parameter.model_copy(update={"value": selection_by_code.get(parameter.code.strip().lower(), parameter.value)})
+        for parameter in payload.parameters
+    ]
+    return payload.model_copy(update={"parameter_definitions": definitions, "parameters": parameters})
+
+
+def derive_typical_preview(
+    payload: EquipmentTypicalCreate,
+    parameter_selections: list[TypicalDerivationParameterSelection] | None = None,
+) -> TypicalDerivationPreview:
+    resolved_payload = _payload_with_parameter_selections(payload, parameter_selections)
+    groups = build_interface_groups(resolved_payload)
+    interfaces = build_interfaces(resolved_payload)
+    validation = validate_typical_payload(resolved_payload)
+    issues = list(validation.issues)
+
+    if not interfaces:
+        issues.append(
+            ValidationIssue(
+                severity="warning",
+                code="no_derived_interfaces",
+                message="De huidige parameterselecties leveren geen afgeleide interfaces op.",
+            )
+        )
+
+    layout_hints = [
+        {
+            "side": side,
+            "interface_codes": [
+                interface.code
+                for interface in sorted(interfaces, key=lambda item: (item.side_order, item.sort_order, item.code))
+                if interface.side == side
+            ],
+        }
+        for side in ["left", "right", "top", "bottom"]
+        if any(interface.side == side for interface in interfaces)
+    ]
+
+    return TypicalDerivationPreview(
+        groups=groups,
+        interfaces=[
+            {
+                "group_code": interface.group_code,
+                "code": interface.code,
+                "role": interface.role,
+                "logical_type": interface.logical_type,
+                "direction": interface.direction,
+                "side": interface.side or fallback_layout_side(interface.direction),
+                "side_order": interface.side_order,
+                "source": interface.source,
+                "origin": "selection" if parameter_selections else interface.source,
+                "sort_order": interface.sort_order,
+            }
+            for interface in interfaces
+        ],
+        layout_hints=layout_hints,
+        origin_status="resolved" if interfaces else "no_matches",
+        validation_issues=issues,
+    )
 
 
 def validate_typical_payload(payload: EquipmentTypicalCreate) -> TypicalValidationResult:
@@ -533,6 +696,15 @@ def validate_typical_payload(payload: EquipmentTypicalCreate) -> TypicalValidati
             )
         seen_group_codes.add(normalized_group_code)
 
+        if group.side and normalize_layout_side(group.side) is None:
+            issues.append(
+                ValidationIssue(
+                    severity="error",
+                    code="invalid_interface_group_side",
+                    message=f"Interfacegroep '{group.code}' heeft een onbekende layoutzijde.",
+                )
+            )
+
     seen_mapping_keys: set[tuple[str, str, str]] = set()
     for rule in mapping_rules:
         driver_code = rule.driver_parameter_code.strip().lower()
@@ -594,6 +766,36 @@ def validate_typical_payload(payload: EquipmentTypicalCreate) -> TypicalValidati
                 )
             )
 
+    raw_interface_codes: dict[str, str] = {}
+    disabled_interface_codes = {
+        code.strip().lower()
+        for code in payload.disabled_interface_codes
+        if code.strip()
+    }
+    for interface in payload.interfaces:
+        normalized_code = interface.code.strip().lower()
+        if not normalized_code:
+            continue
+        if normalized_code in raw_interface_codes:
+            issues.append(
+                ValidationIssue(
+                    severity="error",
+                    code="conflicting_interface_override",
+                    message=f"Interface '{interface.code}' heeft meerdere expliciete overrides/layoutregels.",
+                    interface_code=interface.code,
+                )
+            )
+        raw_interface_codes[normalized_code] = interface.source
+        if normalized_code in disabled_interface_codes:
+            issues.append(
+                ValidationIssue(
+                    severity="error",
+                    code="disabled_interface_has_override",
+                    message=f"Interface '{interface.code}' is uitgeschakeld maar heeft ook een expliciete override.",
+                    interface_code=interface.code,
+                )
+            )
+
     seen_interface_codes: set[str] = set()
     for interface in interfaces:
         normalized_code = interface.code.strip().lower()
@@ -603,6 +805,7 @@ def validate_typical_payload(payload: EquipmentTypicalCreate) -> TypicalValidati
                     severity="error",
                     code="missing_interface_code",
                     message="Interfacecode ontbreekt.",
+                    interface_code=interface.code,
                 )
             )
             continue
@@ -613,6 +816,7 @@ def validate_typical_payload(payload: EquipmentTypicalCreate) -> TypicalValidati
                     severity="error",
                     code="duplicate_interface_code",
                     message=f"Interfacecode '{interface.code}' komt meer dan eens voor.",
+                    interface_code=interface.code,
                 )
             )
         seen_interface_codes.add(normalized_code)
@@ -623,6 +827,7 @@ def validate_typical_payload(payload: EquipmentTypicalCreate) -> TypicalValidati
                     severity="error",
                     code="interface_group_missing",
                     message=f"Interface '{interface.code}' verwijst naar een onbekende interfacegroep.",
+                    interface_code=interface.code,
                 )
             )
 
@@ -632,6 +837,7 @@ def validate_typical_payload(payload: EquipmentTypicalCreate) -> TypicalValidati
                     severity="error",
                     code="missing_interface_role",
                     message=f"Interface '{interface.code}' heeft geen rol.",
+                    interface_code=interface.code,
                 )
             )
 
@@ -641,6 +847,18 @@ def validate_typical_payload(payload: EquipmentTypicalCreate) -> TypicalValidati
                     severity="error",
                     code="invalid_interface_direction",
                     message=f"Interface '{interface.code}' heeft een ongeldige richting.",
+                    interface_code=interface.code,
+                )
+            )
+
+    for interface in payload.interfaces:
+        if interface.side and normalize_layout_side(interface.side) is None:
+            issues.append(
+                ValidationIssue(
+                    severity="error",
+                    code="invalid_interface_side",
+                    message=f"Interface '{interface.code}' heeft een onbekende layoutzijde.",
+                    interface_code=interface.code,
                 )
             )
 
@@ -665,6 +883,7 @@ def _build_parameter_definitions(payload: EquipmentTypicalCreate) -> list[Typica
                 required=1 if parameter.required else 0,
                 is_parametrizable=1 if parameter.is_parametrizable else 0,
                 drives_interfaces=1 if parameter.drives_interfaces else 0,
+                show_on_canvas=0,
                 bundle_id=None,
                 sort_order=parameter.sort_order,
             )
@@ -683,6 +902,7 @@ def _build_parameter_definitions(payload: EquipmentTypicalCreate) -> list[Typica
             required=1 if definition.required else 0,
             is_parametrizable=1 if definition.is_parametrizable else 0,
             drives_interfaces=1 if definition.drives_interfaces else 0,
+            show_on_canvas=1 if definition.show_on_canvas else 0,
             bundle_id=definition.bundle_id,
             sort_order=definition.sort_order,
         )
@@ -773,6 +993,7 @@ def _to_payload(typical: EquipmentTypical) -> EquipmentTypicalCreate:
                 "required": bool(definition.required),
                 "is_parametrizable": bool(definition.is_parametrizable),
                 "drives_interfaces": bool(definition.drives_interfaces),
+                "show_on_canvas": bool(definition.show_on_canvas),
                 "bundle_id": definition.bundle_id,
                 "sort_order": definition.sort_order,
             }
@@ -812,6 +1033,8 @@ def _to_payload(typical: EquipmentTypical) -> EquipmentTypicalCreate:
                 "role": interface.role,
                 "logical_type": interface.logical_type,
                 "direction": interface.direction,
+                "side": interface.side,
+                "side_order": interface.side_order,
                 "source": interface.source,
                 "sort_order": interface.sort_order,
             }

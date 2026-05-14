@@ -24,6 +24,68 @@ class Project(Base):
     instances: Mapped[list["ProjectEquipmentInstance"]] = relationship(
         back_populates="project", cascade="all, delete-orphan"
     )
+    cabinets: Mapped[list["CabinetInstance"]] = relationship(
+        back_populates="project", cascade="all, delete-orphan"
+    )
+    field_objects: Mapped[list["FieldObjectInstance"]] = relationship(
+        back_populates="project", cascade="all, delete-orphan"
+    )
+
+
+class CabinetInstance(Base):
+    __tablename__ = "cabinet_instances"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    project_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    parent_cabinet_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("cabinet_instances.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    tag: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    cabinet_kind: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="active", nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+    )
+
+    project: Mapped[Project] = relationship(back_populates="cabinets")
+    parent_cabinet: Mapped["CabinetInstance | None"] = relationship(remote_side="CabinetInstance.id")
+    equipment_instances: Mapped[list["ProjectEquipmentInstance"]] = relationship(back_populates="cabinet")
+
+
+class FieldObjectInstance(Base):
+    __tablename__ = "field_object_instances"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    project_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    parent_field_object_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("field_object_instances.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    tag: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    field_object_kind: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="active", nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+    )
+
+    project: Mapped[Project] = relationship(back_populates="field_objects")
+    parent_field_object: Mapped["FieldObjectInstance | None"] = relationship(
+        remote_side="FieldObjectInstance.id"
+    )
+    equipment_instances: Mapped[list["ProjectEquipmentInstance"]] = relationship(
+        back_populates="field_object"
+    )
 
 
 class ProjectEquipmentInstance(Base):
@@ -36,6 +98,12 @@ class ProjectEquipmentInstance(Base):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     tag: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    cabinet_instance_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("cabinet_instances.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    field_object_instance_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("field_object_instances.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     typical_id: Mapped[str] = mapped_column(String(36), ForeignKey("equipment_typicals.id"), nullable=False)
     typical_lineage_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     typical_version: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -49,6 +117,8 @@ class ProjectEquipmentInstance(Base):
     )
 
     project: Mapped[Project] = relationship(back_populates="instances")
+    cabinet: Mapped[CabinetInstance | None] = relationship(back_populates="equipment_instances")
+    field_object: Mapped[FieldObjectInstance | None] = relationship(back_populates="equipment_instances")
     parameter_definition_snapshots: Mapped[list["InstanceParameterDefinitionSnapshot"]] = relationship(
         back_populates="instance", cascade="all, delete-orphan"
     )
@@ -83,6 +153,7 @@ class InstanceParameterDefinitionSnapshot(Base):
     required: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     is_parametrizable: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     drives_interfaces: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    show_on_canvas: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     origin: Mapped[str] = mapped_column(String(30), default="inherited", nullable=False)
     visibility: Mapped[str] = mapped_column(String(20), default="active", nullable=False)
     sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
@@ -167,6 +238,8 @@ class InstanceInterface(Base):
     role: Mapped[str] = mapped_column(String(100), nullable=False)
     logical_type: Mapped[str] = mapped_column(String(50), nullable=False)
     direction: Mapped[str] = mapped_column(String(20), nullable=False)
+    side: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    side_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     source: Mapped[str] = mapped_column(String(30), default="derived", nullable=False)
     sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
