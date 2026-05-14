@@ -1,8 +1,11 @@
 import { FormEvent, MouseEvent, useEffect, useMemo, useState } from "react";
 import { Menu, MenuItem } from "@mui/material";
 import { DataGrid, GridColDef, GridRenderCellParams } from "@mui/x-data-grid";
+import EtimWorkspace from "./EtimWorkspace";
+import LibraryInterfaceWorkbench from "./LibraryInterfaceWorkbench";
 import ProjectWorkspace from "./ProjectWorkspace";
 import TypicalLibraryTree from "./TypicalLibraryTree";
+import WikiWorkspace from "./WikiWorkspace";
 
 type HealthResponse = {
   status: string;
@@ -53,6 +56,7 @@ type GovernedParameterDefinition = {
   required: boolean;
   is_parametrizable: boolean;
   drives_interfaces: boolean;
+  show_on_canvas: boolean;
   sort_order: number;
 };
 
@@ -63,6 +67,8 @@ type EditableInterface = {
   role: string;
   logical_type: string;
   direction: string;
+  side?: string | null;
+  side_order?: number;
   source: "derived" | "override";
   sort_order: number;
 };
@@ -120,6 +126,7 @@ type EquipmentTypicalDetail = EquipmentTypical & {
     required: number;
     is_parametrizable: number;
     drives_interfaces: number;
+    show_on_canvas: number;
     sort_order: number;
   }[];
   parameters: {
@@ -142,6 +149,8 @@ type EquipmentTypicalDetail = EquipmentTypical & {
     role: string;
     logical_type: string;
     direction: string;
+    side?: string | null;
+    side_order?: number;
     source: string;
     sort_order: number;
   }[];
@@ -224,11 +233,12 @@ type ParameterDefinitionPreset = {
   unit: string | null;
   default_value: string | null;
   allowed_values: string[];
-  required: number;
-  is_parametrizable: number;
-  drives_interfaces: number;
-  sort_order: number;
-  interface_groups: {
+    required: number;
+    is_parametrizable: number;
+    drives_interfaces: number;
+    show_on_canvas: number;
+    sort_order: number;
+    interface_groups: {
     code: string;
     name: string;
     category: string;
@@ -255,11 +265,43 @@ type ValidationIssue = {
   message: string;
   parameter_code?: string | null;
   parameter_name?: string | null;
+  interface_code?: string | null;
 };
 
 type TypicalValidationResult = {
   valid: boolean;
   issues: ValidationIssue[];
+};
+
+type TypicalDerivationPreview = {
+  groups: EquipmentTypicalDetail["interface_groups"];
+  interfaces: {
+    group_code: string | null;
+    code: string;
+    role: string;
+    logical_type: string;
+    direction: string;
+    side: string;
+    side_order: number;
+    source: string;
+    origin: string;
+    sort_order: number;
+  }[];
+  layout_hints: {
+    side: string;
+    interface_codes: string[];
+  }[];
+  origin_status: string;
+  validation_issues: ValidationIssue[];
+};
+
+type WorkbenchDerivationRow = {
+  parameter_code: string;
+  parameter_name: string;
+  driver_value: string;
+  loading: boolean;
+  preview: TypicalDerivationPreview | null;
+  error: string | null;
 };
 
 type EditablePreset = {
@@ -277,6 +319,7 @@ type EditablePreset = {
   required: boolean;
   is_parametrizable: boolean;
   drives_interfaces: boolean;
+  show_on_canvas: boolean;
   sort_order: number;
   interface_groups: ParameterDefinitionPreset["interface_groups"];
   interface_mapping_rules: ParameterDefinitionPreset["interface_mapping_rules"];
@@ -398,6 +441,7 @@ function createDefinitionFromFeature(feature: EtimFeatureDetail): GovernedParame
     required: false,
     is_parametrizable: true,
     drives_interfaces: false,
+    show_on_canvas: false,
     sort_order: feature.sort_order ?? 0,
   };
 }
@@ -437,6 +481,7 @@ function createDefinitionFromPreset(
     required: preset.required === 1,
     is_parametrizable: preset.is_parametrizable === 1,
     drives_interfaces: preset.drives_interfaces === 1,
+    show_on_canvas: preset.show_on_canvas === 1,
     sort_order: existingDefinitions.length + 100,
   };
 }
@@ -495,6 +540,7 @@ function toEditablePreset(preset: ParameterDefinitionPreset): EditablePreset {
     required: preset.required === 1,
     is_parametrizable: preset.is_parametrizable === 1,
     drives_interfaces: preset.drives_interfaces === 1,
+    show_on_canvas: preset.show_on_canvas === 1,
     sort_order: preset.sort_order,
     interface_groups: preset.interface_groups,
     interface_mapping_rules: preset.interface_mapping_rules,
@@ -756,6 +802,7 @@ function ensureTemplateDefinitions(
             allowed_values_text: SWITCH_TOPOLOGIES.join(", "),
             required: true,
             drives_interfaces: true,
+            show_on_canvas: true,
             default_value:
               definition.default_value && SWITCH_TOPOLOGIES.includes(definition.default_value as (typeof SWITCH_TOPOLOGIES)[number])
                 ? definition.default_value
@@ -768,6 +815,7 @@ function ensureTemplateDefinitions(
               definition.code.toLowerCase() === "ef008618" || definition.name.toLowerCase().includes("number of poles")
                 ? false
                 : definition.drives_interfaces,
+            show_on_canvas: definition.show_on_canvas,
           },
     );
   }
@@ -787,6 +835,7 @@ function ensureTemplateDefinitions(
       required: true,
       is_parametrizable: true,
       drives_interfaces: true,
+      show_on_canvas: true,
       sort_order: -10,
     },
     ...definitions,
@@ -980,6 +1029,7 @@ function normalizeDefinition(
     required: definition.required === 1,
     is_parametrizable: definition.is_parametrizable === 1,
     drives_interfaces: definition.drives_interfaces === 1,
+    show_on_canvas: definition.show_on_canvas === 1,
     sort_order: definition.sort_order,
   };
 }
@@ -1018,6 +1068,7 @@ function serializeEditorState(args: {
         required: definition.required,
         is_parametrizable: definition.is_parametrizable,
         drives_interfaces: definition.drives_interfaces,
+        show_on_canvas: definition.show_on_canvas,
         sort_order: definition.sort_order,
       }))
       .sort((left, right) => left.sort_order - right.sort_order),
@@ -1059,6 +1110,8 @@ function serializeEditorState(args: {
         role: item.role,
         logical_type: item.logical_type,
         direction: item.direction,
+        side: item.side ?? null,
+        side_order: item.side_order ?? 0,
         source: item.source,
         sort_order: item.sort_order,
       }))
@@ -1068,6 +1121,8 @@ function serializeEditorState(args: {
 }
 
 export default function App() {
+  const [workspaceMode, setWorkspaceMode] = useState<"library" | "projects" | "etim" | "wiki">("library");
+  const [libraryTab, setLibraryTab] = useState<"typicals" | "workbench" | "presets" | "taxonomy">("typicals");
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
@@ -1103,22 +1158,26 @@ export default function App() {
   const [libraryPlacement, setLibraryPlacement] = useState<TypicalLibraryPlacement | null>(null);
   const [treeContextMenu, setTreeContextMenu] = useState<TreeContextMenuState>(null);
   const [validation, setValidation] = useState<TypicalValidationResult | null>(null);
+  const [workbenchDerivationRows, setWorkbenchDerivationRows] = useState<WorkbenchDerivationRow[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [validating, setValidating] = useState(false);
   const [loadingTypical, setLoadingTypical] = useState(false);
   const [savedSnapshot, setSavedSnapshot] = useState("");
   const isReleasedTypical = mode === "edit" && selectedTypicalStatus === "released";
 
-  const selectedClass =
-    classes.find((item) => item.id === selectedClassId) ??
-    (classDetail
-      ? {
-          id: classDetail.id,
-          description: classDetail.description,
-          version: classDetail.version,
-          group_id: classDetail.group_id,
-        }
-      : undefined);
+  const selectedClass = useMemo(
+    () =>
+      classes.find((item) => item.id === selectedClassId) ??
+      (classDetail
+        ? {
+            id: classDetail.id,
+            description: classDetail.description,
+            version: classDetail.version,
+            group_id: classDetail.group_id,
+          }
+        : undefined),
+    [classDetail, classes, selectedClassId],
+  );
   const selectedFeatureKeys = useMemo(
     () => definitions.map((definition) => definition.feature_key),
     [definitions],
@@ -1658,6 +1717,7 @@ export default function App() {
       required: definition.required,
       is_parametrizable: definition.is_parametrizable,
       drives_interfaces: definition.drives_interfaces,
+      show_on_canvas: definition.show_on_canvas,
       sort_order: definition.sort_order,
       interface_groups: relatedGroups.map((group) => ({
         code: group.code,
@@ -1735,6 +1795,7 @@ export default function App() {
         required: definition.required,
         is_parametrizable: definition.is_parametrizable,
         drives_interfaces: definition.drives_interfaces,
+        show_on_canvas: definition.show_on_canvas,
         sort_order: definition.sort_order,
         interface_groups: relatedGroups.map((group) => ({
           code: group.code,
@@ -1816,6 +1877,7 @@ export default function App() {
       required: preset.required === 1,
       is_parametrizable: preset.is_parametrizable === 1,
       drives_interfaces: preset.drives_interfaces === 1,
+      show_on_canvas: preset.show_on_canvas === 1,
       sort_order: preset.sort_order,
     });
 
@@ -1842,6 +1904,7 @@ export default function App() {
             required: preset.required === 1,
             is_parametrizable: preset.is_parametrizable === 1,
             drives_interfaces: preset.drives_interfaces === 1,
+            show_on_canvas: preset.show_on_canvas === 1,
             sort_order: preset.sort_order,
           }
         : definition,
@@ -1960,6 +2023,7 @@ export default function App() {
         required: presetDraft.required,
         is_parametrizable: presetDraft.is_parametrizable,
         drives_interfaces: presetDraft.drives_interfaces,
+        show_on_canvas: presetDraft.show_on_canvas,
         sort_order: presetDraft.sort_order,
         interface_groups: presetDraft.interface_groups,
         interface_mapping_rules: presetDraft.interface_mapping_rules,
@@ -2006,6 +2070,7 @@ export default function App() {
         required: repaired.required === 1,
         is_parametrizable: repaired.is_parametrizable === 1,
         drives_interfaces: repaired.drives_interfaces === 1,
+        show_on_canvas: repaired.show_on_canvas === 1,
         sort_order: repaired.sort_order,
         interface_groups: repaired.interface_groups,
         interface_mapping_rules: repaired.interface_mapping_rules,
@@ -2063,6 +2128,7 @@ export default function App() {
         required: definition.required,
         is_parametrizable: definition.is_parametrizable,
         drives_interfaces: definition.drives_interfaces,
+        show_on_canvas: definition.show_on_canvas,
         bundle_id: definition.bundle_id,
         sort_order: definition.sort_order,
       })),
@@ -2094,12 +2160,106 @@ export default function App() {
         role: item.role,
         logical_type: item.logical_type,
         direction: item.direction,
+        side: item.side ?? null,
+        side_order: item.side_order ?? 0,
         source: item.source,
         sort_order: item.sort_order,
       })),
       disabled_interface_codes: disabledInterfaceCodes,
     };
   }
+
+  useEffect(() => {
+    if (libraryTab !== "workbench") {
+      return;
+    }
+
+    const payload = buildPayload();
+    if (!payload) {
+      setWorkbenchDerivationRows([]);
+      return;
+    }
+
+    const driverDefinitions = definitions.filter((definition) => definition.drives_interfaces);
+    const rows = driverDefinitions.flatMap((definition) => {
+      const values =
+        definition.allowed_values.length > 0
+          ? definition.allowed_values
+          : [definition.default_value].filter(Boolean);
+      return values.map((value) => ({
+        parameter_code: definition.code,
+        parameter_name: definition.name,
+        driver_value: value,
+        loading: true,
+        preview: null,
+        error: null,
+      }));
+    });
+
+    if (rows.length === 0) {
+      setWorkbenchDerivationRows([]);
+      return;
+    }
+
+    setWorkbenchDerivationRows(rows);
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => {
+      void Promise.all(
+        rows.map(async (row) => {
+          try {
+            const response = await fetch(`${apiBaseUrl}/api/v1/typicals/derive-preview`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                typical: payload,
+                parameter_selections: [
+                  {
+                    parameter_code: row.parameter_code,
+                    selected_value: row.driver_value,
+                  },
+                ],
+              }),
+              signal: controller.signal,
+            });
+
+            if (!response.ok) {
+              throw new Error("Preview mislukt");
+            }
+
+            const preview = (await response.json()) as TypicalDerivationPreview;
+            setWorkbenchDerivationRows((current) =>
+              current.map((item) =>
+                item.parameter_code === row.parameter_code && item.driver_value === row.driver_value
+                  ? { ...item, loading: false, preview, error: null }
+                  : item,
+              ),
+            );
+          } catch (err) {
+            if (controller.signal.aborted) {
+              return;
+            }
+            setWorkbenchDerivationRows((current) =>
+              current.map((item) =>
+                item.parameter_code === row.parameter_code && item.driver_value === row.driver_value
+                  ? {
+                      ...item,
+                      loading: false,
+                      preview: null,
+                      error: err instanceof Error ? err.message : "Preview mislukt",
+                    }
+                  : item,
+              ),
+            );
+          }
+        }),
+      );
+    }, 250);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+      controller.abort();
+    };
+  }, [currentSnapshot, definitions, libraryTab, selectedClass]);
 
   async function handleSaveTypical() {
     if (!selectedClassId || !selectedClass) {
@@ -2281,6 +2441,7 @@ export default function App() {
         required: false,
         is_parametrizable: true,
         drives_interfaces: false,
+        show_on_canvas: false,
         sort_order: current.length + 100,
       },
     ]);
@@ -2460,6 +2621,64 @@ export default function App() {
     );
   }
 
+  function updateWorkbenchInterfaceLayout(
+    interfaceCode: string,
+    patch: Partial<Pick<EditableInterface, "side" | "side_order" | "sort_order">>,
+    baseInterface: {
+      group_code: string | null;
+      code: string;
+      role: string;
+      logical_type: string;
+      direction: string;
+      source: string;
+      sort_order: number;
+      side?: string | null;
+      side_order?: number;
+    },
+  ) {
+    setInterfaces((current) => {
+      const existing = current.find((item) => normalizeInterfaceCode(item.code) === normalizeInterfaceCode(interfaceCode));
+      if (existing) {
+        return current.map((item) =>
+          normalizeInterfaceCode(item.code) === normalizeInterfaceCode(interfaceCode)
+            ? { ...item, ...patch }
+            : item,
+        );
+      }
+
+      return [
+        ...current,
+        {
+          local_key: `layout-${interfaceCode}`,
+          group_code: baseInterface.group_code,
+          code: baseInterface.code,
+          role: baseInterface.role,
+          logical_type: baseInterface.logical_type,
+          direction: baseInterface.direction,
+          side: patch.side ?? baseInterface.side ?? null,
+          side_order: patch.side_order ?? baseInterface.side_order ?? baseInterface.sort_order,
+          source: "derived",
+          sort_order: patch.sort_order ?? baseInterface.sort_order,
+        },
+      ];
+    });
+  }
+
+  function disableWorkbenchInterface(interfaceCode: string) {
+    const normalized = normalizeInterfaceCode(interfaceCode);
+    setDisabledInterfaceCodes((current) =>
+      current.includes(normalized) ? current : [...current, normalized],
+    );
+    setInterfaces((current) =>
+      current.filter((item) => normalizeInterfaceCode(item.code) !== normalized),
+    );
+  }
+
+  function restoreWorkbenchInterface(interfaceCode: string) {
+    const normalized = normalizeInterfaceCode(interfaceCode);
+    setDisabledInterfaceCodes((current) => current.filter((code) => code !== normalized));
+  }
+
   function deleteInterface(localKey: string) {
     setInterfaces((current) => {
       const target = current.find((item) => item.local_key === localKey);
@@ -2531,6 +2750,7 @@ export default function App() {
                 required: parameter.required === 1,
                 is_parametrizable: parameter.is_parametrizable === 1,
                 drives_interfaces: parameter.drives_interfaces === 1,
+                show_on_canvas: false,
                 sort_order: parameter.sort_order,
               })),
             );
@@ -2561,6 +2781,8 @@ export default function App() {
           role: item.role,
           logical_type: item.logical_type,
           direction: item.direction,
+          side: item.side ?? null,
+          side_order: item.side_order ?? item.sort_order,
           source: item.source === "override" ? "override" : "derived",
           sort_order: item.sort_order,
         }));
@@ -2998,6 +3220,25 @@ export default function App() {
               onChange={(event) =>
                 updateDefinition(String(params.row.feature_key), {
                   drives_interfaces: event.target.checked,
+                })
+              }
+            />
+          </label>
+          ),
+      },
+      {
+        field: "show_on_canvas",
+        headerName: "Canvas",
+        width: 86,
+        sortable: false,
+        renderCell: (params: GridRenderCellParams) => (
+          <label className="checkbox-cell">
+            <input
+              type="checkbox"
+              checked={Boolean(params.row.show_on_canvas)}
+              onChange={(event) =>
+                updateDefinition(String(params.row.feature_key), {
+                  show_on_canvas: event.target.checked,
                 })
               }
             />
@@ -3589,8 +3830,131 @@ export default function App() {
           </article>
         </div>
 
+        <div className="workspace-mode-switch" role="tablist" aria-label="Workspace modes">
+          <button
+            className={workspaceMode === "library" ? "mode-button active" : "mode-button"}
+            onClick={() => setWorkspaceMode("library")}
+            type="button"
+          >
+            Library
+          </button>
+          <button
+            className={workspaceMode === "projects" ? "mode-button active" : "mode-button"}
+            onClick={() => setWorkspaceMode("projects")}
+            type="button"
+          >
+            Projects
+          </button>
+          <button
+            className={workspaceMode === "etim" ? "mode-button active" : "mode-button"}
+            onClick={() => setWorkspaceMode("etim")}
+            type="button"
+          >
+            Etim
+          </button>
+          <button
+            className={workspaceMode === "wiki" ? "mode-button active" : "mode-button"}
+            onClick={() => setWorkspaceMode("wiki")}
+            type="button"
+          >
+            Wiki
+          </button>
+        </div>
+
+        {workspaceMode === "library" ? (
         <section className="roadmap-card">
           <h2>Governed parameter definitions</h2>
+          <div className="workspace-mode-switch" role="tablist" aria-label="Library tabs">
+            <button
+              className={libraryTab === "typicals" ? "mode-button active" : "mode-button"}
+              onClick={() => setLibraryTab("typicals")}
+              type="button"
+            >
+              Typicals
+            </button>
+            <button
+              className={libraryTab === "workbench" ? "mode-button active" : "mode-button"}
+              onClick={() => setLibraryTab("workbench")}
+              type="button"
+            >
+              Interface Workbench
+            </button>
+            <button
+              className={libraryTab === "presets" ? "mode-button active" : "mode-button"}
+              onClick={() => setLibraryTab("presets")}
+              type="button"
+            >
+              Presets
+            </button>
+            <button
+              className={libraryTab === "taxonomy" ? "mode-button active" : "mode-button"}
+              onClick={() => setLibraryTab("taxonomy")}
+              type="button"
+            >
+              Taxonomy
+            </button>
+          </div>
+          {libraryTab === "workbench" ? (
+            <LibraryInterfaceWorkbench
+              classes={classes}
+              typicals={typicals}
+              selectedTypicalId={selectedTypicalId}
+              selectedClassId={selectedClassId}
+              selectedClass={selectedClass}
+              classDetail={classDetail}
+              mode={mode}
+              selectedTypicalStatus={selectedTypicalStatus}
+              selectedTypicalVersion={selectedTypicalVersion}
+              typicalName={typicalName}
+              typicalCode={typicalCode}
+              typicalDescription={typicalDescription}
+              definitions={definitions}
+              interfaceGroups={interfaceGroups}
+              interfaceMappingRules={interfaceMappingRules}
+              interfaces={interfaces}
+              disabledInterfaceCodes={disabledInterfaceCodes}
+              derivationRows={workbenchDerivationRows}
+              validationIssues={validation?.issues ?? []}
+              isReleasedTypical={isReleasedTypical}
+              submitting={submitting}
+              validating={validating}
+              loadingTypical={loadingTypical}
+              onSelectClass={(classId) => {
+                if (!confirmDiscardChanges()) {
+                  return;
+                }
+                setSelectedClassId(classId);
+                if (mode === "create") {
+                  setSelectedTypicalId(null);
+                }
+                setSavedSnapshot("");
+              }}
+              onTypicalNameChange={setTypicalName}
+              onTypicalCodeChange={setTypicalCode}
+              onTypicalDescriptionChange={setTypicalDescription}
+              onAddLocalParameter={addLocalParameter}
+              onUpdateDefinition={updateDefinition}
+              onAddInterfaceGroup={addInterfaceGroup}
+              onUpdateInterfaceGroup={updateInterfaceGroup}
+              onDeleteInterfaceGroup={deleteInterfaceGroup}
+              onAddInterfaceMappingRule={addInterfaceMappingRule}
+              onUpdateInterfaceMappingRule={updateInterfaceMappingRule}
+              onDeleteInterfaceMappingRule={deleteInterfaceMappingRule}
+              onUpdateInterfaceLayout={updateWorkbenchInterfaceLayout}
+              onDisableInterface={disableWorkbenchInterface}
+              onRestoreInterface={restoreWorkbenchInterface}
+              onAddOverrideInterface={addOverrideInterface}
+              onUpdateInterfaceOverride={updateInterface}
+              onDeleteInterfaceOverride={deleteInterface}
+              onNewTypical={handleNewTypical}
+              onSaveTypical={handleSaveTypical}
+              onValidateTypical={handleValidateTypical}
+              onReleaseTypical={handleReleaseTypical}
+              onCreateDraftFromReleased={handleCreateDraftFromReleased}
+              onOpenTypical={(typicalId) => void handleEditTypical(typicalId)}
+            />
+          ) : null}
+          {libraryTab === "typicals" ? (
           <form className="search-row" onSubmit={handleSearch}>
             <input
               value={search}
@@ -3599,33 +3963,63 @@ export default function App() {
             />
             <button type="submit">Zoek</button>
           </form>
+          ) : null}
 
-          <div className="split-layout">
-            <div>
-              <h3>ETIM classes</h3>
-              <div className="list-panel">
-                {classes.map((item) => (
-                  <label className="list-item" key={item.id}>
-                    <input
-                      checked={selectedClassId === item.id}
-                      name="selected-class"
-                      onChange={() => {
-                        if (!confirmDiscardChanges()) {
-                          return;
-                        }
-                        setSelectedClassId(item.id);
-                        setSavedSnapshot("");
-                      }}
-                      type="radio"
-                    />
-                    <span>
-                      <strong>{item.id}</strong>
-                      <small>{item.description}</small>
-                    </span>
-                  </label>
-                ))}
+          {libraryTab === "typicals" ? (
+          <div className="workspace-layout">
+            <div className="workspace-sidebar">
+              <div className="editor-panel">
+                <div className="editor-header">
+                  <div>
+                    <h3>ETIM classes</h3>
+                    <p className="section-caption">Selecteer een ETIM class als basis voor een typical.</p>
+                  </div>
+                </div>
+                <div className="list-panel">
+                  {classes.map((item) => (
+                    <label className="list-item" key={item.id}>
+                      <input
+                        checked={selectedClassId === item.id}
+                        name="selected-class"
+                        onChange={() => {
+                          if (!confirmDiscardChanges()) {
+                            return;
+                          }
+                          setSelectedClassId(item.id);
+                          setSavedSnapshot("");
+                        }}
+                        type="radio"
+                      />
+                      <span>
+                        <strong>{item.id}</strong>
+                        <small>{item.description}</small>
+                      </span>
+                    </label>
+                  ))}
+                </div>
               </div>
 
+              <div className="editor-panel">
+                <div className="editor-header">
+                  <div>
+                    <h3>Typicals</h3>
+                    <p className="section-caption">Open een bestaande typical of gebruik de tree als library navigator.</p>
+                  </div>
+                </div>
+                {libraryTree.length === 0 ? (
+                  <p className="empty-state">Nog geen typicals opgeslagen.</p>
+                ) : (
+                  <TypicalLibraryTree
+                    nodes={libraryTree}
+                    onOpenTypical={(typicalId) => void handleEditTypical(typicalId)}
+                    onNodeContextMenu={handleTreeNodeContextMenu}
+                    onDropTypical={(args) => void handleDropTypicalToNode(args)}
+                  />
+                )}
+              </div>
+            </div>
+
+            <div className="workspace-detail">
               <div className="editor-panel">
                 <div className="editor-header">
                   <h3>{mode === "edit" ? "Bewerk typical" : "Nieuwe typical"}</h3>
@@ -3700,134 +4094,57 @@ export default function App() {
                   </p>
                 ) : null}
                 <div className="editor-actions">
-                <button disabled={!selectedClassId || submitting || isReleasedTypical} onClick={handleSaveTypical} type="button">
-                  {submitting
-                    ? mode === "edit"
-                      ? "Opslaan..."
-                      : "Aanmaken..."
-                    : mode === "edit"
-                      ? "Sla wijzigingen op"
-                      : "Maak Equipment Typical"}
-                </button>
-                <button
-                  className="secondary-button"
-                  disabled={!selectedClassId || validating}
-                  onClick={handleValidateTypical}
-                  type="button"
-                >
-                  {validating ? "Valideren..." : "Valideer"}
-                </button>
-                </div>
-              </div>
-            </div>
-
-            <div>
-              <h3>ETIM features</h3>
-              <div className="list-panel">
-                {!classDetail ? (
-                  <p className="empty-state">Geen klasse geselecteerd.</p>
-                ) : (
-                  classDetail.features.map((feature) => {
-                    const checked = selectedFeatureKeys.includes(feature.art_class_feature_nr);
-
-                    return (
-                      <label className="feature-item" key={feature.art_class_feature_nr}>
-                        <input
-                          disabled={isReleasedTypical}
-                          checked={checked}
-                          onChange={() => toggleFeature(feature)}
-                          type="checkbox"
-                        />
-                        <span>
-                          <strong>{feature.feature_description ?? feature.feature_id}</strong>
-                          <small>
-                            {featureInputType(feature)}
-                            {feature.unit_description ? ` · ${feature.unit_description}` : ""}
-                            {feature.values.length > 0 ? ` · ${feature.values.length} waarden` : ""}
-                          </small>
-                        </span>
-                      </label>
-                    );
-                  })
-                )}
-              </div>
-            </div>
-
-            <div>
-              <h3>Opgeslagen typicals</h3>
-              {libraryTree.length === 0 ? (
-                <p className="empty-state">Nog geen typicals opgeslagen.</p>
-              ) : (
-                <TypicalLibraryTree
-                  nodes={libraryTree}
-                  onOpenTypical={(typicalId) => void handleEditTypical(typicalId)}
-                  onNodeContextMenu={handleTreeNodeContextMenu}
-                  onDropTypical={(args) => void handleDropTypicalToNode(args)}
-                />
-              )}
-            </div>
-
-            <div>
-              <h3>Bibliotheekstructuur</h3>
-              <div className="editor-panel">
-                <div className="definition-grid">
-                  <label className="field">
-                    <span>Naam</span>
-                    <input
-                      value={libraryNodeName}
-                      onChange={(event) => setLibraryNodeName(event.target.value)}
-                    />
-                  </label>
-                  <label className="field">
-                    <span>Code</span>
-                    <input
-                      value={libraryNodeCode}
-                      onChange={(event) => setLibraryNodeCode(event.target.value)}
-                    />
-                  </label>
-                  <label className="field">
-                    <span>Parent</span>
-                    <select
-                      value={libraryNodeParentId}
-                      onChange={(event) => setLibraryNodeParentId(event.target.value)}
-                    >
-                      <option value="">Root</option>
-                      {sortedLibraryNodes.map((node) => (
-                        <option key={node.id} value={node.id}>
-                          {node.name}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                </div>
-                <div className="editor-actions">
-                  <button onClick={() => void handleCreateLibraryNode()} type="button">
-                    Voeg library node toe
+                  <button disabled={!selectedClassId || submitting || isReleasedTypical} onClick={handleSaveTypical} type="button">
+                    {submitting
+                      ? mode === "edit"
+                        ? "Opslaan..."
+                        : "Aanmaken..."
+                      : mode === "edit"
+                        ? "Sla wijzigingen op"
+                        : "Maak Equipment Typical"}
+                  </button>
+                  <button
+                    className="secondary-button"
+                    disabled={!selectedClassId || validating}
+                    onClick={handleValidateTypical}
+                    type="button"
+                  >
+                    {validating ? "Valideren..." : "Valideer"}
                   </button>
                 </div>
+              </div>
+
+              <div className="editor-panel">
+                <div className="editor-header">
+                  <div>
+                    <h3>ETIM features</h3>
+                    <p className="section-caption">Selecteer de ETIM-features die governed parameters worden in de typical.</p>
+                  </div>
+                </div>
                 <div className="list-panel">
-                  {sortedLibraryNodes.length === 0 ? (
-                    <p className="empty-state">Nog geen eigen library nodes.</p>
+                  {!classDetail ? (
+                    <p className="empty-state">Geen klasse geselecteerd.</p>
                   ) : (
-                    sortedLibraryNodes.map((node) => {
-                      const parent = sortedLibraryNodes.find((candidate) => candidate.id === node.parent_id);
+                    classDetail.features.map((feature) => {
+                      const checked = selectedFeatureKeys.includes(feature.art_class_feature_nr);
+
                       return (
-                        <article className="typical-card" key={node.id}>
-                          <div className="typical-card-body">
-                            <strong>{node.name}</strong>
-                            <small>{node.code}</small>
-                            <small>{parent ? `Parent: ${parent.name}` : "Root node"}</small>
-                          </div>
-                          <div className="typical-actions">
-                            <button
-                              className="delete-button"
-                              onClick={() => void handleDeleteLibraryNode(node.id)}
-                              type="button"
-                            >
-                              Verwijder
-                            </button>
-                          </div>
-                        </article>
+                        <label className="feature-item" key={feature.art_class_feature_nr}>
+                          <input
+                            disabled={isReleasedTypical}
+                            checked={checked}
+                            onChange={() => toggleFeature(feature)}
+                            type="checkbox"
+                          />
+                          <span>
+                            <strong>{feature.feature_description ?? feature.feature_id}</strong>
+                            <small>
+                              {featureInputType(feature)}
+                              {feature.unit_description ? ` · ${feature.unit_description}` : ""}
+                              {feature.values.length > 0 ? ` · ${feature.values.length} waarden` : ""}
+                            </small>
+                          </span>
+                        </label>
                       );
                     })
                   )}
@@ -3835,8 +4152,95 @@ export default function App() {
               </div>
             </div>
           </div>
+          ) : null}
 
-          {mode === "edit" && selectedTypicalLineageId ? (
+          {libraryTab === "taxonomy" ? (
+            <div className="split-layout">
+              <div>
+                <h3>Library tree</h3>
+                {libraryTree.length === 0 ? (
+                  <p className="empty-state">Nog geen library nodes of placements beschikbaar.</p>
+                ) : (
+                  <TypicalLibraryTree
+                    nodes={libraryTree}
+                    onOpenTypical={(typicalId) => void handleEditTypical(typicalId)}
+                    onNodeContextMenu={handleTreeNodeContextMenu}
+                    onDropTypical={(args) => void handleDropTypicalToNode(args)}
+                  />
+                )}
+              </div>
+
+              <div>
+                <h3>Bibliotheekstructuur</h3>
+                <div className="editor-panel">
+                  <div className="definition-grid">
+                    <label className="field">
+                      <span>Naam</span>
+                      <input
+                        value={libraryNodeName}
+                        onChange={(event) => setLibraryNodeName(event.target.value)}
+                      />
+                    </label>
+                    <label className="field">
+                      <span>Code</span>
+                      <input
+                        value={libraryNodeCode}
+                        onChange={(event) => setLibraryNodeCode(event.target.value)}
+                      />
+                    </label>
+                    <label className="field">
+                      <span>Parent</span>
+                      <select
+                        value={libraryNodeParentId}
+                        onChange={(event) => setLibraryNodeParentId(event.target.value)}
+                      >
+                        <option value="">Root</option>
+                        {sortedLibraryNodes.map((node) => (
+                          <option key={node.id} value={node.id}>
+                            {node.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+                  <div className="editor-actions">
+                    <button onClick={() => void handleCreateLibraryNode()} type="button">
+                      Voeg library node toe
+                    </button>
+                  </div>
+                  <div className="list-panel">
+                    {sortedLibraryNodes.length === 0 ? (
+                      <p className="empty-state">Nog geen eigen library nodes.</p>
+                    ) : (
+                      sortedLibraryNodes.map((node) => {
+                        const parent = sortedLibraryNodes.find((candidate) => candidate.id === node.parent_id);
+                        return (
+                          <article className="typical-card" key={node.id}>
+                            <div className="typical-card-body">
+                              <strong>{node.name}</strong>
+                              <small>{node.code}</small>
+                              <small>{parent ? `Parent: ${parent.name}` : "Root node"}</small>
+                            </div>
+                            <div className="typical-actions">
+                              <button
+                                className="delete-button"
+                                onClick={() => void handleDeleteLibraryNode(node.id)}
+                                type="button"
+                              >
+                                Verwijder
+                              </button>
+                            </div>
+                          </article>
+                        );
+                      })
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : null}
+
+          {libraryTab === "typicals" && mode === "edit" && selectedTypicalLineageId ? (
             <div className="governance-panel">
               <div className="editor-header">
                 <h3>Library placement</h3>
@@ -3897,6 +4301,7 @@ export default function App() {
             </div>
           ) : null}
 
+          {libraryTab === "typicals" ? (
           <div className={`governance-panel${isReleasedTypical ? " read-only-panel" : ""}`}>
             <div className="editor-header">
               <h3>Parameter governance</h3>
@@ -3963,7 +4368,9 @@ export default function App() {
               </button>
             </div>
           </div>
+          ) : null}
 
+          {libraryTab === "typicals" ? (
           <div className={`interfaces-panel${isReleasedTypical ? " read-only-panel" : ""}`}>
             <div className="editor-header">
               <h3>Interface mappings</h3>
@@ -3988,7 +4395,9 @@ export default function App() {
               </div>
             )}
           </div>
+          ) : null}
 
+          {libraryTab === "presets" ? (
           <div className="governance-panel">
             <div className="editor-header">
               <h3>Presetbibliotheek</h3>
@@ -4149,6 +4558,20 @@ export default function App() {
                     />
                     Stuurt interfaces
                   </label>
+                  <label className="checkbox-field">
+                    <input
+                      type="checkbox"
+                      checked={presetDraft.show_on_canvas}
+                      onChange={(event) =>
+                        setPresetDraft((current) =>
+                          current
+                            ? { ...current, show_on_canvas: event.target.checked }
+                            : current,
+                        )
+                      }
+                    />
+                    Show on canvas
+                  </label>
                 </div>
                 <div className="editor-actions">
                   <button onClick={handleSavePresetDraft} type="button">
@@ -4172,7 +4595,9 @@ export default function App() {
               </div>
             ) : null}
           </div>
+          ) : null}
 
+          {libraryTab === "typicals" ? (
           <div className={`interfaces-panel${isReleasedTypical ? " read-only-panel" : ""}`}>
             <div className="editor-header">
               <h3>Interfaces</h3>
@@ -4247,8 +4672,9 @@ export default function App() {
               </button>
             </div>
           </div>
+          ) : null}
 
-          {mode === "edit" && typicalVersions.length > 0 ? (
+          {libraryTab === "typicals" && mode === "edit" && typicalVersions.length > 0 ? (
             <div className="governance-panel">
               <div className="editor-header">
                 <h3>Versies</h3>
@@ -4278,6 +4704,7 @@ export default function App() {
             </div>
           ) : null}
 
+          {libraryTab === "typicals" ? (
           <div className="validation-panel">
             <div className="editor-header">
               <h3>Validatie</h3>
@@ -4311,6 +4738,7 @@ export default function App() {
               </div>
             )}
           </div>
+          ) : null}
 
           <ul>
             <li>Equipment Typical bibliotheek</li>
@@ -4318,9 +4746,14 @@ export default function App() {
             <li>Parametergestuurde interface-afleiding</li>
             <li>Draft en released versies</li>
           </ul>
-
-          <ProjectWorkspace apiBaseUrl={apiBaseUrl} />
         </section>
+        ) : workspaceMode === "etim" ? (
+          <EtimWorkspace apiBaseUrl={apiBaseUrl} />
+        ) : workspaceMode === "wiki" ? (
+          <WikiWorkspace />
+        ) : (
+          <ProjectWorkspace apiBaseUrl={apiBaseUrl} />
+        )}
       </section>
       <Menu
         open={treeContextMenu !== null}

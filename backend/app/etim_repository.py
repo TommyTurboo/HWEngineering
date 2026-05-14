@@ -1,14 +1,69 @@
 import sqlite3
 from collections import defaultdict
+from functools import lru_cache
 
 from app.config import settings
-from app.schemas import EtimClassDetail, EtimClassSummary, EtimFeatureDetail, EtimFeatureOption
+from app.schemas import (
+    EtimClassDetail,
+    EtimClassSummary,
+    EtimFeatureDetail,
+    EtimFeatureOption,
+    EtimSearchResult,
+)
 
 
 def _connect() -> sqlite3.Connection:
     conn = sqlite3.connect(settings.etim_db_path)
     conn.row_factory = sqlite3.Row
     return conn
+
+
+@lru_cache(maxsize=1)
+def _load_class_search_index() -> list[dict]:
+    with _connect() as conn:
+        class_rows = conn.execute(
+            """
+            SELECT
+                a.ARTCLASSID,
+                a.ARTCLASSDESC,
+                a.ARTCLASSVERSION,
+                a.ARTGROUPID,
+                g.GROUPDESC
+            FROM ETIM_ART_CLASS a
+            LEFT JOIN ETIM_ART_GROUP g ON g.ARTGROUPID = a.ARTGROUPID
+            ORDER BY a.ARTCLASSDESC
+            """
+        ).fetchall()
+        synonym_rows = conn.execute(
+            """
+            SELECT ARTCLASSID, CLASSSYNONYM
+            FROM ETIM_ART_CLASS_SYNONYM_MAP
+            ORDER BY ARTCLASSID, CLASSSYNONYM
+            """
+        ).fetchall()
+
+    synonyms_by_class: dict[str, list[str]] = defaultdict(list)
+    for row in synonym_rows:
+        synonym = row["CLASSSYNONYM"]
+        if synonym:
+            synonyms_by_class[row["ARTCLASSID"]].append(synonym)
+
+    index: list[dict] = []
+    for row in class_rows:
+        synonyms = synonyms_by_class.get(row["ARTCLASSID"], [])
+        index.append(
+            {
+                "id": row["ARTCLASSID"],
+                "description": row["ARTCLASSDESC"] or "",
+                "description_lower": (row["ARTCLASSDESC"] or "").lower(),
+                "version": row["ARTCLASSVERSION"],
+                "group_id": row["ARTGROUPID"],
+                "group_description": row["GROUPDESC"],
+                "synonyms": synonyms,
+                "synonyms_lower": [item.lower() for item in synonyms],
+            }
+        )
+    return index
 
 
 def list_classes(search: str | None = None, limit: int = 25) -> list[EtimClassSummary]:
@@ -36,6 +91,61 @@ def list_classes(search: str | None = None, limit: int = 25) -> list[EtimClassSu
         )
         for row in rows
     ]
+
+
+def search_classes_extended(search: str | None = None, limit: int = 25) -> list[EtimSearchResult]:
+    normalized_limit = max(1, min(limit, 100))
+    index = _load_class_search_index()
+    if not search:
+        return [
+            EtimSearchResult(
+                id=row["id"],
+                description=row["description"],
+                version=row["version"],
+                group_id=row["group_id"],
+                group_description=row["group_description"],
+                matching_synonyms=[],
+                matching_synonym_count=0,
+                total_synonym_count=len(row["synonyms"]),
+            )
+            for row in index[:normalized_limit]
+        ]
+
+    token = search.lower().strip()
+    scored_rows: list[tuple[int, int, int, str, dict, list[str]]] = []
+    for row in index:
+        direct_desc_match = 1 if token in row["description_lower"] else 0
+        direct_id_match = 1 if token in row["id"].lower() else 0
+        matching_synonyms = [item for item, item_lower in zip(row["synonyms"], row["synonyms_lower"]) if token in item_lower]
+        if not direct_desc_match and not direct_id_match and not matching_synonyms:
+            continue
+        scored_rows.append(
+            (
+                direct_desc_match,
+                direct_id_match,
+                len(matching_synonyms),
+                row["description"],
+                row,
+                matching_synonyms,
+            )
+        )
+
+    scored_rows.sort(key=lambda item: (-item[0], -item[1], -item[2], item[3]))
+    results: list[EtimSearchResult] = []
+    for _, _, _, _, row, matching_synonyms in scored_rows[:normalized_limit]:
+        results.append(
+            EtimSearchResult(
+                id=row["id"],
+                description=row["description"],
+                version=row["version"],
+                group_id=row["group_id"],
+                group_description=row["group_description"],
+                matching_synonyms=matching_synonyms,
+                matching_synonym_count=len(matching_synonyms),
+                total_synonym_count=len(row["synonyms"]),
+            )
+        )
+    return results
 
 
 def get_art_group_descriptions(group_ids: list[str]) -> dict[str, str]:

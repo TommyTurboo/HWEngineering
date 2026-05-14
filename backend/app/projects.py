@@ -1,11 +1,15 @@
 import json
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
+from app.connections import prune_invalid_project_connections_for_instance
 from app.models import EquipmentTypical
+from app.project_canvas_models import ProjectCanvasEdge
 from app.project_models import (
+    CabinetInstance,
+    FieldObjectInstance,
     InstanceInterface,
     InstanceInterfaceGroup,
     InstanceInterfaceMappingRuleSnapshot,
@@ -16,6 +20,7 @@ from app.project_models import (
 )
 from app.project_schemas import InstanceCreate, InstanceUpdate, ProjectCreate, ProjectUpdate
 from app.project_schemas import InstanceValidationIssue, InstanceValidationResult
+from app.typicals import fallback_layout_side, normalize_layout_side
 
 
 def _instance_query():
@@ -62,10 +67,16 @@ def _derive_instance_interfaces(
     selections: list[InstanceParameterSelection],
     rules: list[InstanceInterfaceMappingRuleSnapshot],
     active_parameter_codes: set[str] | None = None,
+    groups: list[InstanceInterfaceGroup] | None = None,
 ) -> list[InstanceInterface]:
     selected_values = {
         selection.parameter_code.strip().lower(): (selection.selected_value or "").strip()
         for selection in selections
+    }
+    group_side_by_code = {
+        group.code.strip().lower(): group.side
+        for group in groups or []
+        if group.code.strip()
     }
     interfaces: list[InstanceInterface] = []
     for rule in rules:
@@ -73,6 +84,7 @@ def _derive_instance_interfaces(
         if active_parameter_codes is not None and normalized_driver_code not in active_parameter_codes:
             continue
         if selected_values.get(normalized_driver_code, "") == rule.driver_value:
+            side = fallback_layout_side(rule.direction, group_side_by_code.get((rule.group_code or "").strip().lower()))
             interfaces.append(
                 InstanceInterface(
                     group_code=rule.group_code,
@@ -80,11 +92,42 @@ def _derive_instance_interfaces(
                     role=rule.role,
                     logical_type=rule.logical_type,
                     direction=rule.direction,
+                    side=side,
+                    side_order=rule.sort_order,
                     source="derived",
                     sort_order=rule.sort_order,
                 )
             )
-    return sorted(interfaces, key=lambda item: (item.sort_order, item.code))
+    return sorted(interfaces, key=lambda item: (item.side or "", item.side_order, item.sort_order, item.code))
+
+
+def _prune_invalid_canvas_edges_for_instance(db: Session, instance: ProjectEquipmentInstance) -> int:
+    valid_input_handles = {item.code for item in instance.interfaces if item.direction == "in"}
+    valid_output_handles = {item.code for item in instance.interfaces if item.direction == "out"}
+    stmt = (
+        select(ProjectCanvasEdge)
+        .where(ProjectCanvasEdge.project_id == instance.project_id)
+        .where(
+            or_(
+                ProjectCanvasEdge.source_instance_id == instance.id,
+                ProjectCanvasEdge.target_instance_id == instance.id,
+            )
+        )
+    )
+    removed = 0
+    for edge in db.scalars(stmt):
+        invalid_source = edge.source_instance_id == instance.id and edge.source_handle not in valid_output_handles
+        invalid_target = edge.target_instance_id == instance.id and edge.target_handle not in valid_input_handles
+        if invalid_source or invalid_target:
+            db.delete(edge)
+            removed += 1
+    return removed
+
+
+def _prune_invalid_canvas_links_for_instance(db: Session, instance: ProjectEquipmentInstance) -> int:
+    removed_canvas_edges = _prune_invalid_canvas_edges_for_instance(db, instance)
+    removed_connections = prune_invalid_project_connections_for_instance(db, instance)
+    return removed_canvas_edges + removed_connections
 
 
 def validate_project_instance(instance: ProjectEquipmentInstance) -> InstanceValidationResult:
@@ -174,6 +217,7 @@ def validate_project_instance(instance: ProjectEquipmentInstance) -> InstanceVal
         instance.parameter_selections,
         instance.interface_mapping_rule_snapshots,
         active_definition_codes,
+        instance.interface_groups,
     )
     if not derived_interfaces:
         issues.append(
@@ -267,6 +311,24 @@ def list_project_instances(db: Session, project_id: str) -> list[ProjectEquipmen
     return [_normalize_instance(item) for item in db.scalars(stmt)]
 
 
+def _validate_instance_placement(
+    db: Session,
+    project_id: str,
+    cabinet_instance_id: str | None,
+    field_object_instance_id: str | None,
+) -> None:
+    if cabinet_instance_id and field_object_instance_id:
+        raise ValueError("Een instance kan niet tegelijk in een cabinet en bij een field object geplaatst zijn.")
+    if cabinet_instance_id:
+        cabinet = db.get(CabinetInstance, cabinet_instance_id)
+        if cabinet is None or cabinet.project_id != project_id:
+            raise ValueError("Geselecteerd cabinet hoort niet bij dit project.")
+    if field_object_instance_id:
+        field_object = db.get(FieldObjectInstance, field_object_instance_id)
+        if field_object is None or field_object.project_id != project_id:
+            raise ValueError("Geselecteerd field object hoort niet bij dit project.")
+
+
 def _released_typical_or_error(db: Session, typical_id: str) -> EquipmentTypical:
     stmt = (
         select(EquipmentTypical)
@@ -324,6 +386,7 @@ def _snapshot_definitions_and_selections(typical: EquipmentTypical) -> tuple[
                 required=definition.required,
                 is_parametrizable=definition.is_parametrizable,
                 drives_interfaces=definition.drives_interfaces,
+                show_on_canvas=definition.show_on_canvas,
                 origin="inherited",
                 visibility="active",
                 sort_order=definition.sort_order,
@@ -380,6 +443,7 @@ def _snapshot_definitions_and_selections(typical: EquipmentTypical) -> tuple[
                 required=required,
                 is_parametrizable=is_parametrizable,
                 drives_interfaces=1,
+                show_on_canvas=0,
                 origin="inherited",
                 visibility="active",
                 sort_order=next_sort_order,
@@ -405,6 +469,7 @@ def create_project_instance(db: Session, project_id: str, payload: InstanceCreat
     project = db.get(Project, project_id)
     if project is None:
         raise ValueError("Project niet gevonden.")
+    _validate_instance_placement(db, project_id, payload.cabinet_instance_id, payload.field_object_instance_id)
     typical = _released_typical_or_error(db, payload.released_typical_id)
 
     instance = ProjectEquipmentInstance(
@@ -412,6 +477,8 @@ def create_project_instance(db: Session, project_id: str, payload: InstanceCreat
         name=payload.name,
         tag=payload.tag,
         description=payload.description,
+        cabinet_instance_id=payload.cabinet_instance_id,
+        field_object_instance_id=payload.field_object_instance_id,
         typical_id=typical.id,
         typical_lineage_id=typical.lineage_id,
         typical_version=typical.version,
@@ -455,7 +522,34 @@ def create_project_instance(db: Session, project_id: str, payload: InstanceCreat
             for definition in instance.parameter_definition_snapshots
             if definition.visibility == "active"
         },
+        instance.interface_groups,
     )
+    if not instance.interfaces:
+        instance.interfaces = [
+            InstanceInterface(
+                group_code=interface.group_code,
+                code=interface.code,
+                role=interface.role,
+                logical_type=interface.logical_type,
+                direction=interface.direction,
+                side=normalize_layout_side(interface.side)
+                or fallback_layout_side(
+                    interface.direction,
+                    next(
+                        (
+                            group.side
+                            for group in instance.interface_groups
+                            if group.code.strip().lower() == (interface.group_code or "").strip().lower()
+                        ),
+                        None,
+                    ),
+                ),
+                side_order=interface.side_order,
+                source=interface.source,
+                sort_order=interface.sort_order,
+            )
+            for interface in typical.interfaces
+        ]
 
     db.add(instance)
     db.commit()
@@ -476,6 +570,8 @@ def duplicate_project_instance(db: Session, instance_id: str) -> ProjectEquipmen
         name=f"{source.name} kopie",
         tag=f"{source.tag}-copy",
         description=source.description,
+        cabinet_instance_id=source.cabinet_instance_id,
+        field_object_instance_id=source.field_object_instance_id,
         typical_id=source.typical_id,
         typical_lineage_id=source.typical_lineage_id,
         typical_version=source.typical_version,
@@ -497,6 +593,7 @@ def duplicate_project_instance(db: Session, instance_id: str) -> ProjectEquipmen
             required=definition.required,
             is_parametrizable=definition.is_parametrizable,
             drives_interfaces=definition.drives_interfaces,
+            show_on_canvas=definition.show_on_canvas,
             origin=definition.origin,
             visibility=definition.visibility,
             sort_order=definition.sort_order,
@@ -545,6 +642,8 @@ def duplicate_project_instance(db: Session, instance_id: str) -> ProjectEquipmen
             role=interface.role,
             logical_type=interface.logical_type,
             direction=interface.direction,
+            side=interface.side,
+            side_order=interface.side_order,
             source=interface.source,
             sort_order=interface.sort_order,
         )
@@ -570,9 +669,18 @@ def update_project_instance(
     if instance is None:
         return None
 
+    _validate_instance_placement(
+        db,
+        instance.project_id,
+        payload.cabinet_instance_id,
+        payload.field_object_instance_id,
+    )
+
     instance.name = payload.name
     instance.tag = payload.tag
     instance.description = payload.description
+    instance.cabinet_instance_id = payload.cabinet_instance_id
+    instance.field_object_instance_id = payload.field_object_instance_id
 
     snapshot_stmt = _instance_query().where(ProjectEquipmentInstance.id == instance_id)
     hydrated = db.scalars(snapshot_stmt).first()
@@ -596,6 +704,7 @@ def update_project_instance(
                 required=1 if definition.required else 0,
                 is_parametrizable=1 if definition.is_parametrizable else 0,
                 drives_interfaces=1 if definition.drives_interfaces else 0,
+                show_on_canvas=1 if definition.show_on_canvas else 0,
                 origin=definition.origin,
                 visibility=definition.visibility,
                 sort_order=definition.sort_order,
@@ -667,8 +776,10 @@ def update_project_instance(
             hydrated.parameter_selections,
             hydrated.interface_mapping_rule_snapshots,
             active_definition_codes,
+            hydrated.interface_groups,
         )
     )
+    _prune_invalid_canvas_links_for_instance(db, hydrated)
 
     db.commit()
     db.refresh(instance)

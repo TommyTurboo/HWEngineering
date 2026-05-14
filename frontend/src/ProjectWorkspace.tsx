@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { DataGrid, GridColDef, GridRenderCellParams } from "@mui/x-data-grid";
+import ProjectCanvasWorkspace from "./ProjectCanvasWorkspace";
 
 type TypicalListItem = {
   id: string;
@@ -25,11 +26,39 @@ type ProjectInstanceListItem = {
   name: string;
   tag: string;
   description?: string | null;
+  cabinet_instance_id?: string | null;
+  field_object_instance_id?: string | null;
   typical_name: string;
   typical_code: string;
   typical_version: number;
   etim_class_id: string;
   status: string;
+};
+
+type CabinetInstanceItem = {
+  id: string;
+  project_id: string;
+  parent_cabinet_id?: string | null;
+  name: string;
+  tag: string;
+  description?: string | null;
+  cabinet_kind?: string | null;
+  status: string;
+  sort_order: number;
+  equipment_instance_count: number;
+};
+
+type FieldObjectInstanceItem = {
+  id: string;
+  project_id: string;
+  parent_field_object_id?: string | null;
+  name: string;
+  tag: string;
+  description?: string | null;
+  field_object_kind?: string | null;
+  status: string;
+  sort_order: number;
+  equipment_instance_count: number;
 };
 
 type InstanceDetail = ProjectInstanceListItem & {
@@ -45,6 +74,7 @@ type InstanceDetail = ProjectInstanceListItem & {
     required: number;
     is_parametrizable?: number;
     drives_interfaces?: number;
+    show_on_canvas?: number;
     origin: string;
     visibility: string;
     sort_order: number;
@@ -114,6 +144,7 @@ type Props = {
 };
 
 export default function ProjectWorkspace({ apiBaseUrl }: Props) {
+  const [projectTab, setProjectTab] = useState<"overview" | "workspace" | "canvas">("overview");
   const [projects, setProjects] = useState<ProjectListItem[]>([]);
   const [releasedTypicals, setReleasedTypicals] = useState<TypicalListItem[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
@@ -135,6 +166,12 @@ export default function ProjectWorkspace({ apiBaseUrl }: Props) {
   const [selectedProjectName, setSelectedProjectName] = useState("");
   const [selectedProjectCode, setSelectedProjectCode] = useState("");
   const [selectedProjectDescription, setSelectedProjectDescription] = useState("");
+  const [cabinets, setCabinets] = useState<CabinetInstanceItem[]>([]);
+  const [fieldObjects, setFieldObjects] = useState<FieldObjectInstanceItem[]>([]);
+  const [cabinetName, setCabinetName] = useState("");
+  const [cabinetTag, setCabinetTag] = useState("");
+  const [fieldObjectName, setFieldObjectName] = useState("");
+  const [fieldObjectTag, setFieldObjectTag] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [validation, setValidation] = useState<InstanceValidationResult | null>(null);
@@ -142,8 +179,14 @@ export default function ProjectWorkspace({ apiBaseUrl }: Props) {
   const [lastValidatedAt, setLastValidatedAt] = useState<string | null>(null);
 
   useEffect(() => {
-    void refreshProjects();
-    void refreshReleasedTypicals();
+    void refreshProjects().catch(() => {
+      setProjects([]);
+      setError("Projecten laden mislukt. Controleer of de backend draait.");
+    });
+    void refreshReleasedTypicals().catch(() => {
+      setReleasedTypicals([]);
+      setError("Released typicals laden mislukt. Controleer of de backend draait.");
+    });
   }, []);
 
   const selectionMap = useMemo(() => {
@@ -153,6 +196,14 @@ export default function ProjectWorkspace({ apiBaseUrl }: Props) {
   const selectedProject = useMemo(
     () => projects.find((item) => item.id === selectedProjectId) ?? null,
     [projects, selectedProjectId],
+  );
+  const cabinetNameById = useMemo(
+    () => Object.fromEntries(cabinets.map((item) => [item.id, item.name])),
+    [cabinets],
+  );
+  const fieldObjectNameById = useMemo(
+    () => Object.fromEntries(fieldObjects.map((item) => [item.id, item.name])),
+    [fieldObjects],
   );
 
   async function refreshProjects(selectedId?: string | null) {
@@ -188,15 +239,29 @@ export default function ProjectWorkspace({ apiBaseUrl }: Props) {
     }
   }
 
+  async function refreshProjectContext(projectId: string) {
+    const [cabinetsResponse, fieldObjectsResponse] = await Promise.all([
+      fetch(`${apiBaseUrl}/api/v1/projects/${projectId}/cabinets`),
+      fetch(`${apiBaseUrl}/api/v1/projects/${projectId}/field-objects`),
+    ]);
+    if (!cabinetsResponse.ok || !fieldObjectsResponse.ok) {
+      throw new Error("Projectcontext laden mislukt");
+    }
+    setCabinets((await cabinetsResponse.json()) as CabinetInstanceItem[]);
+    setFieldObjects((await fieldObjectsResponse.json()) as FieldObjectInstanceItem[]);
+  }
+
   async function openProject(projectId: string) {
     setError(null);
     setSuccessMessage(null);
+    setProjectTab("workspace");
     setSelectedProjectId(projectId);
     setSelectedInstance(null);
     const project = projects.find((item) => item.id === projectId) ?? null;
     setSelectedProjectName(project?.name ?? "");
     setSelectedProjectCode(project?.code ?? "");
     setSelectedProjectDescription(project?.description ?? "");
+    await refreshProjectContext(projectId);
     await refreshInstances(projectId);
   }
 
@@ -242,6 +307,96 @@ export default function ProjectWorkspace({ apiBaseUrl }: Props) {
     setProjectDescription("");
     setSuccessMessage("Project aangemaakt.");
     await openProject(created.id);
+  }
+
+  async function handleCreateCabinet(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!selectedProjectId) return;
+    setError(null);
+    setSuccessMessage(null);
+    const response = await fetch(`${apiBaseUrl}/api/v1/projects/${selectedProjectId}/cabinets`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: cabinetName,
+        tag: cabinetTag,
+        description: null,
+        cabinet_kind: null,
+        status: "active",
+        sort_order: cabinets.length,
+      }),
+    });
+    if (!response.ok) {
+      const detail = (await response.json().catch(() => null)) as { detail?: string } | null;
+      setError(detail?.detail ?? "Cabinet aanmaken mislukt");
+      return;
+    }
+    setCabinetName("");
+    setCabinetTag("");
+    await refreshProjectContext(selectedProjectId);
+    setSuccessMessage("Cabinet aangemaakt.");
+  }
+
+  async function handleDeleteCabinet(cabinetId: string) {
+    if (!window.confirm("Wil je dit cabinet verwijderen?")) return;
+    setError(null);
+    setSuccessMessage(null);
+    const response = await fetch(`${apiBaseUrl}/api/v1/cabinets/${cabinetId}`, { method: "DELETE" });
+    if (!response.ok) {
+      const detail = (await response.json().catch(() => null)) as { detail?: string } | null;
+      setError(detail?.detail ?? "Cabinet verwijderen mislukt");
+      return;
+    }
+    if (selectedProjectId) {
+      await refreshProjectContext(selectedProjectId);
+      await refreshInstances(selectedProjectId, selectedInstance?.id ?? null);
+    }
+    setSuccessMessage("Cabinet verwijderd.");
+  }
+
+  async function handleCreateFieldObject(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!selectedProjectId) return;
+    setError(null);
+    setSuccessMessage(null);
+    const response = await fetch(`${apiBaseUrl}/api/v1/projects/${selectedProjectId}/field-objects`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: fieldObjectName,
+        tag: fieldObjectTag,
+        description: null,
+        field_object_kind: null,
+        status: "active",
+        sort_order: fieldObjects.length,
+      }),
+    });
+    if (!response.ok) {
+      const detail = (await response.json().catch(() => null)) as { detail?: string } | null;
+      setError(detail?.detail ?? "Field object aanmaken mislukt");
+      return;
+    }
+    setFieldObjectName("");
+    setFieldObjectTag("");
+    await refreshProjectContext(selectedProjectId);
+    setSuccessMessage("Field object aangemaakt.");
+  }
+
+  async function handleDeleteFieldObject(fieldObjectId: string) {
+    if (!window.confirm("Wil je dit field object verwijderen?")) return;
+    setError(null);
+    setSuccessMessage(null);
+    const response = await fetch(`${apiBaseUrl}/api/v1/field-objects/${fieldObjectId}`, { method: "DELETE" });
+    if (!response.ok) {
+      const detail = (await response.json().catch(() => null)) as { detail?: string } | null;
+      setError(detail?.detail ?? "Field object verwijderen mislukt");
+      return;
+    }
+    if (selectedProjectId) {
+      await refreshProjectContext(selectedProjectId);
+      await refreshInstances(selectedProjectId, selectedInstance?.id ?? null);
+    }
+    setSuccessMessage("Field object verwijderd.");
   }
 
   async function handleUpdateProject() {
@@ -468,6 +623,7 @@ export default function ProjectWorkspace({ apiBaseUrl }: Props) {
             required: 0,
             is_parametrizable: 1,
             drives_interfaces: 0,
+            show_on_canvas: 0,
             origin: "instance_added",
             visibility: "active",
             sort_order: nextSortOrder,
@@ -554,6 +710,7 @@ export default function ProjectWorkspace({ apiBaseUrl }: Props) {
                 required: 0,
                 is_parametrizable: 1,
                 drives_interfaces: 0,
+                show_on_canvas: 0,
                 origin: "project_etim_added",
                 visibility: "active",
                 sort_order: nextSortOrder,
@@ -606,6 +763,8 @@ export default function ProjectWorkspace({ apiBaseUrl }: Props) {
         name: selectedInstance.name,
         tag: selectedInstance.tag,
         description: selectedInstance.description || null,
+        cabinet_instance_id: selectedInstance.cabinet_instance_id || null,
+        field_object_instance_id: selectedInstance.field_object_instance_id || null,
         parameter_definition_snapshots: selectedInstance.parameter_definition_snapshots.map((definition) => ({
           parameter_code: definition.parameter_code,
           parameter_name: definition.parameter_name,
@@ -617,6 +776,7 @@ export default function ProjectWorkspace({ apiBaseUrl }: Props) {
           required: definition.required === 1,
           is_parametrizable: definition.is_parametrizable !== 0,
           drives_interfaces: definition.drives_interfaces === 1,
+          show_on_canvas: definition.show_on_canvas === 1,
           origin: definition.origin,
           visibility: definition.visibility,
           sort_order: definition.sort_order,
@@ -1125,13 +1285,40 @@ export default function ProjectWorkspace({ apiBaseUrl }: Props) {
         Deze laag gebruikt alleen released typicals en laat concrete projectinstances met echte
         parameterkeuzes en afgeleide interfaces toe.
       </p>
+      <div className="workspace-mode-switch" role="tablist" aria-label="Project tabs">
+        <button
+          className={projectTab === "overview" ? "mode-button active" : "mode-button"}
+          onClick={() => setProjectTab("overview")}
+          type="button"
+        >
+          Overview
+        </button>
+        <button
+          className={projectTab === "workspace" ? "mode-button active" : "mode-button"}
+          onClick={() => setProjectTab("workspace")}
+          type="button"
+        >
+          Workspace
+        </button>
+        <button
+          className={projectTab === "canvas" ? "mode-button active" : "mode-button"}
+          onClick={() => setProjectTab("canvas")}
+          type="button"
+        >
+          Canvas
+        </button>
+      </div>
       {error ? <p className="error-message">{error}</p> : null}
       {successMessage ? <p className="success-message">{successMessage}</p> : null}
 
+      {projectTab === "overview" ? (
       <div className="split-layout">
         <div className="editor-panel">
           <div className="editor-header">
-            <h3>Nieuw project</h3>
+            <div>
+              <h3>Nieuw project</h3>
+              <p className="section-caption">Maak een projectcontainer aan voor released typical instances.</p>
+            </div>
           </div>
           <form onSubmit={handleCreateProject}>
             <label className="field">
@@ -1157,7 +1344,11 @@ export default function ProjectWorkspace({ apiBaseUrl }: Props) {
 
         <div className="editor-panel">
           <div className="editor-header">
-            <h3>Projecten</h3>
+            <div>
+              <h3>Projecten</h3>
+              <p className="section-caption">Selecteer een project om instances te beheren.</p>
+            </div>
+            <small className="empty-state">{projects.length} totaal</small>
           </div>
           <div className="list-panel">
             {projects.length === 0 ? (
@@ -1188,12 +1379,19 @@ export default function ProjectWorkspace({ apiBaseUrl }: Props) {
           </div>
         </div>
       </div>
+      ) : null}
 
+      {projectTab === "workspace" ? (
+      <div className="workspace-layout">
+        <div className="workspace-sidebar">
       {selectedProjectId ? (
-        <div className="split-layout">
+        <>
           <div className="editor-panel">
             <div className="editor-header">
-              <h3>Project bewerken</h3>
+              <div>
+                <h3>Project detail</h3>
+                <p className="section-caption">Werk naam, code en beschrijving van het geselecteerde project bij.</p>
+              </div>
             </div>
             <label className="field">
               <span>Naam</span>
@@ -1219,7 +1417,10 @@ export default function ProjectWorkspace({ apiBaseUrl }: Props) {
 
           <div className="editor-panel">
             <div className="editor-header">
-              <h3>Nieuwe instance</h3>
+              <div>
+                <h3>Nieuwe instance</h3>
+                <p className="section-caption">Maak een nieuwe instance op basis van een released typical.</p>
+              </div>
             </div>
             <form onSubmit={handleCreateInstance}>
               <label className="field">
@@ -1258,7 +1459,101 @@ export default function ProjectWorkspace({ apiBaseUrl }: Props) {
 
           <div className="editor-panel">
             <div className="editor-header">
-              <h3>Instances</h3>
+              <div>
+                <h3>Cabinets</h3>
+                <p className="section-caption">Beheer fysieke kasten binnen dit project.</p>
+              </div>
+              <small className="empty-state">{cabinets.length} totaal</small>
+            </div>
+            <form className="inline-create-form" onSubmit={handleCreateCabinet}>
+              <input placeholder="Naam" value={cabinetName} onChange={(event) => setCabinetName(event.target.value)} />
+              <input placeholder="Tag" value={cabinetTag} onChange={(event) => setCabinetTag(event.target.value)} />
+              <button disabled={!cabinetName || !cabinetTag} type="submit">
+                Voeg cabinet toe
+              </button>
+            </form>
+            <div className="list-panel compact-list-panel">
+              {cabinets.length === 0 ? (
+                <p className="empty-state">Nog geen cabinets.</p>
+              ) : (
+                cabinets.map((cabinet) => (
+                  <article className="typical-card" key={cabinet.id}>
+                    <div className="typical-card-body">
+                      <strong>{cabinet.name}</strong>
+                      <small>{cabinet.tag}</small>
+                      <small>{cabinet.equipment_instance_count} instances</small>
+                    </div>
+                    <div className="typical-actions">
+                      <button
+                        className="delete-button"
+                        onClick={() => void handleDeleteCabinet(cabinet.id)}
+                        type="button"
+                      >
+                        Verwijder
+                      </button>
+                    </div>
+                  </article>
+                ))
+              )}
+            </div>
+          </div>
+
+          <div className="editor-panel">
+            <div className="editor-header">
+              <div>
+                <h3>Field objects</h3>
+                <p className="section-caption">Beheer externe objectcontext buiten de kast.</p>
+              </div>
+              <small className="empty-state">{fieldObjects.length} totaal</small>
+            </div>
+            <form className="inline-create-form" onSubmit={handleCreateFieldObject}>
+              <input
+                placeholder="Naam"
+                value={fieldObjectName}
+                onChange={(event) => setFieldObjectName(event.target.value)}
+              />
+              <input
+                placeholder="Tag"
+                value={fieldObjectTag}
+                onChange={(event) => setFieldObjectTag(event.target.value)}
+              />
+              <button disabled={!fieldObjectName || !fieldObjectTag} type="submit">
+                Voeg field object toe
+              </button>
+            </form>
+            <div className="list-panel compact-list-panel">
+              {fieldObjects.length === 0 ? (
+                <p className="empty-state">Nog geen field objects.</p>
+              ) : (
+                fieldObjects.map((fieldObject) => (
+                  <article className="typical-card" key={fieldObject.id}>
+                    <div className="typical-card-body">
+                      <strong>{fieldObject.name}</strong>
+                      <small>{fieldObject.tag}</small>
+                      <small>{fieldObject.equipment_instance_count} instances</small>
+                    </div>
+                    <div className="typical-actions">
+                      <button
+                        className="delete-button"
+                        onClick={() => void handleDeleteFieldObject(fieldObject.id)}
+                        type="button"
+                      >
+                        Verwijder
+                      </button>
+                    </div>
+                  </article>
+                ))
+              )}
+            </div>
+          </div>
+
+          <div className="editor-panel">
+            <div className="editor-header">
+              <div>
+                <h3>Instances</h3>
+                <p className="section-caption">Open, duplicate of verwijder instances binnen dit project.</p>
+              </div>
+              <small className="empty-state">{instances.length} totaal</small>
             </div>
             <div className="list-panel">
               {instances.length === 0 ? (
@@ -1271,6 +1566,13 @@ export default function ProjectWorkspace({ apiBaseUrl }: Props) {
                       <small>{instance.tag}</small>
                       <small>
                         {instance.typical_name} · v{instance.typical_version}
+                      </small>
+                      <small>
+                        {instance.cabinet_instance_id
+                          ? `Cabinet · ${cabinetNameById[instance.cabinet_instance_id] ?? "Onbekend"}`
+                          : instance.field_object_instance_id
+                            ? `Field · ${fieldObjectNameById[instance.field_object_instance_id] ?? "Onbekend"}`
+                            : "Niet geplaatst"}
                       </small>
                     </div>
                     <div className="typical-actions">
@@ -1301,16 +1603,43 @@ export default function ProjectWorkspace({ apiBaseUrl }: Props) {
               )}
             </div>
           </div>
-        </div>
+        </>
       ) : null}
+        </div>
 
+        <div className="workspace-detail">
       {selectedInstance ? (
         <div className="editor-panel">
           <div className="editor-header">
-            <h3>Instance editor</h3>
-            <small className="empty-state">
-              {selectedInstance.typical_name} · v{selectedInstance.typical_version}
-            </small>
+            <div>
+              <h3>Instance editor</h3>
+              <p className="section-caption">
+                {selectedInstance.typical_name} · v{selectedInstance.typical_version}
+              </p>
+            </div>
+          </div>
+
+          <div className="sticky-action-bar">
+            <button onClick={() => void handleSaveInstance()} type="button">
+              Save instance
+            </button>
+            <button
+              className="secondary-button"
+              onClick={() => void handleDuplicateInstance(selectedInstance.id)}
+              type="button"
+            >
+              Duplicate
+            </button>
+            <button className="secondary-button" onClick={() => void handleValidateInstance()} type="button">
+              Validate
+            </button>
+            <button
+              className="delete-button"
+              onClick={() => void handleDeleteInstance(selectedInstance.id)}
+              type="button"
+            >
+              Delete
+            </button>
           </div>
 
           <div className="instance-status-grid">
@@ -1361,6 +1690,58 @@ export default function ProjectWorkspace({ apiBaseUrl }: Props) {
                   }
                 }
               />
+            </label>
+            <label className="field">
+              <span>Cabinet</span>
+              <select
+                value={selectedInstance.cabinet_instance_id ?? ""}
+                onChange={(event) => {
+                  const nextValue = event.target.value || null;
+                  setIsDirty(true);
+                  setSelectedInstance((current) =>
+                    current
+                      ? {
+                          ...current,
+                          cabinet_instance_id: nextValue,
+                          field_object_instance_id: nextValue ? null : current.field_object_instance_id,
+                        }
+                      : current,
+                  );
+                }}
+              >
+                <option value="">Niet geplaatst in cabinet</option>
+                {cabinets.map((cabinet) => (
+                  <option key={cabinet.id} value={cabinet.id}>
+                    {cabinet.name} · {cabinet.tag}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="field">
+              <span>Field object</span>
+              <select
+                value={selectedInstance.field_object_instance_id ?? ""}
+                onChange={(event) => {
+                  const nextValue = event.target.value || null;
+                  setIsDirty(true);
+                  setSelectedInstance((current) =>
+                    current
+                      ? {
+                          ...current,
+                          field_object_instance_id: nextValue,
+                          cabinet_instance_id: nextValue ? null : current.cabinet_instance_id,
+                        }
+                      : current,
+                  );
+                }}
+              >
+                <option value="">Niet geplaatst bij field object</option>
+                {fieldObjects.map((fieldObject) => (
+                  <option key={fieldObject.id} value={fieldObject.id}>
+                    {fieldObject.name} · {fieldObject.tag}
+                  </option>
+                ))}
+              </select>
             </label>
           </div>
 
@@ -1634,6 +2015,44 @@ export default function ProjectWorkspace({ apiBaseUrl }: Props) {
             </button>
           </div>
         </div>
+      ) : (
+        <div className="editor-panel workspace-placeholder">
+          <div className="editor-header">
+            <h3>Instance detail</h3>
+          </div>
+          <p className="empty-state">
+            Selecteer eerst een project en open daarna een instance om de projectconfiguratie te bewerken.
+          </p>
+        </div>
+      )}
+        </div>
+      </div>
+      ) : (
+        <div className="editor-panel workspace-placeholder">
+          <div className="editor-header">
+            <h3>Project workspace</h3>
+          </div>
+          <p className="empty-state">
+            Open eerst een project vanuit `Overview`. De geselecteerde project- en instance-context blijft daarna behouden binnen deze workspace-tab.
+          </p>
+        </div>
+      )}
+
+      {projectTab === "canvas" ? (
+        <ProjectCanvasWorkspace
+          apiBaseUrl={apiBaseUrl}
+          selectedProjectId={selectedProjectId}
+          selectedProjectName={selectedProject?.name ?? ""}
+          instances={instances.map((instance) => ({
+            ...instance,
+            cabinet_name: instance.cabinet_instance_id
+              ? cabinetNameById[instance.cabinet_instance_id] ?? null
+              : null,
+            field_object_name: instance.field_object_instance_id
+              ? fieldObjectNameById[instance.field_object_instance_id] ?? null
+              : null,
+          }))}
+        />
       ) : null}
     </section>
   );

@@ -60,6 +60,7 @@ class ParameterDefinitionPreset(Base):
     required: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     is_parametrizable: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     drives_interfaces: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    show_on_canvas: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     interface_groups_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     interface_mapping_rules_json: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -106,6 +107,7 @@ class TypicalParameterDefinition(Base):
     required: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     is_parametrizable: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     drives_interfaces: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    show_on_canvas: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     bundle_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
@@ -145,6 +147,8 @@ class TypicalInterface(Base):
     role: Mapped[str] = mapped_column(String(100), nullable=False)
     logical_type: Mapped[str] = mapped_column(String(50), nullable=False)
     direction: Mapped[str] = mapped_column(String(20), nullable=False)
+    side: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    side_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     source: Mapped[str] = mapped_column(String(30), default="derived", nullable=False)
     sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 

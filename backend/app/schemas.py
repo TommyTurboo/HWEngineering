@@ -11,6 +11,13 @@ class EtimClassSummary(BaseModel):
     group_id: str | None = None
 
 
+class EtimSearchResult(EtimClassSummary):
+    group_description: str | None = None
+    matching_synonyms: list[str] = Field(default_factory=list)
+    matching_synonym_count: int = 0
+    total_synonym_count: int = 0
+
+
 class EtimFeatureOption(BaseModel):
     value_id: str
     value_description: str | None = None
@@ -58,6 +65,7 @@ class TypicalParameterDefinitionCreate(BaseModel):
     required: bool = False
     is_parametrizable: bool = True
     drives_interfaces: bool = False
+    show_on_canvas: bool = False
     bundle_id: str | None = None
     sort_order: int = 0
 
@@ -68,6 +76,8 @@ class TypicalInterfaceCreate(BaseModel):
     role: str
     logical_type: str
     direction: str
+    side: str | None = None
+    side_order: int = 0
     source: str = "derived"
     sort_order: int = 0
 
@@ -133,6 +143,8 @@ class TypicalInterfaceRead(BaseModel):
     role: str
     logical_type: str
     direction: str
+    side: str | None = None
+    side_order: int
     source: str
     sort_order: int
 
@@ -169,6 +181,7 @@ class TypicalParameterDefinitionRead(BaseModel):
     required: int
     is_parametrizable: int
     drives_interfaces: int
+    show_on_canvas: int
     bundle_id: str | None = None
     sort_order: int
 
@@ -205,6 +218,7 @@ class ParameterDefinitionPresetCreate(BaseModel):
     required: bool = False
     is_parametrizable: bool = True
     drives_interfaces: bool = False
+    show_on_canvas: bool = False
     sort_order: int = 0
     interface_groups: list[TypicalInterfaceGroupCreate] = Field(default_factory=list)
     interface_mapping_rules: list[TypicalInterfaceMappingRuleCreate] = Field(default_factory=list)
@@ -228,6 +242,7 @@ class ParameterDefinitionPresetRead(BaseModel):
     required: int
     is_parametrizable: int
     drives_interfaces: int
+    show_on_canvas: int
     sort_order: int
     interface_groups: list[TypicalInterfaceGroupRead] = Field(default_factory=list)
     interface_mapping_rules: list[TypicalInterfaceMappingRuleRead] = Field(default_factory=list)
@@ -292,6 +307,38 @@ class ValidationIssue(BaseModel):
     message: str
     parameter_code: str | None = None
     parameter_name: str | None = None
+    interface_code: str | None = None
+
+
+class TypicalDerivationParameterSelection(BaseModel):
+    parameter_code: str
+    selected_value: str | None = None
+
+
+class TypicalLayoutHint(BaseModel):
+    side: str
+    interface_codes: list[str] = Field(default_factory=list)
+
+
+class TypicalDerivationPreviewInterface(BaseModel):
+    group_code: str | None = None
+    code: str
+    role: str
+    logical_type: str
+    direction: str
+    side: str
+    side_order: int
+    source: str
+    origin: str
+    sort_order: int
+
+
+class TypicalDerivationPreview(BaseModel):
+    groups: list[TypicalInterfaceGroupRead] = Field(default_factory=list)
+    interfaces: list[TypicalDerivationPreviewInterface] = Field(default_factory=list)
+    layout_hints: list[TypicalLayoutHint] = Field(default_factory=list)
+    origin_status: str
+    validation_issues: list[ValidationIssue] = Field(default_factory=list)
 
 
 class TypicalValidationResult(BaseModel):
@@ -311,6 +358,11 @@ class EquipmentTypicalCreate(BaseModel):
     interface_mapping_rules: list[TypicalInterfaceMappingRuleCreate] = Field(default_factory=list)
     interfaces: list[TypicalInterfaceCreate] = Field(default_factory=list)
     disabled_interface_codes: list[str] = Field(default_factory=list)
+
+
+class TypicalDerivationPreviewRequest(BaseModel):
+    typical: EquipmentTypicalCreate
+    parameter_selections: list[TypicalDerivationParameterSelection] = Field(default_factory=list)
 
 
 class EquipmentTypicalUpdate(EquipmentTypicalCreate):
