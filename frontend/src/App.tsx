@@ -1,16 +1,77 @@
-import { FormEvent, MouseEvent, useEffect, useMemo, useState } from "react";
+import {
+  FormEvent,
+  lazy,
+  MouseEvent,
+  ReactNode,
+  Suspense,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { Menu, MenuItem } from "@mui/material";
 import { DataGrid, GridColDef, GridRenderCellParams } from "@mui/x-data-grid";
-import EtimWorkspace from "./EtimWorkspace";
-import LibraryInterfaceWorkbench from "./LibraryInterfaceWorkbench";
-import ProjectWorkspace from "./ProjectWorkspace";
 import TypicalLibraryTree from "./TypicalLibraryTree";
-import WikiWorkspace from "./WikiWorkspace";
+
+const EtimWorkspace = lazy(() => import("./EtimWorkspace"));
+const LibraryInterfaceWorkbench = lazy(() => import("./LibraryInterfaceWorkbench"));
+const ProjectWorkspace = lazy(() => import("./ProjectWorkspace"));
+const WikiWorkspace = lazy(() => import("./WikiWorkspace"));
 
 type HealthResponse = {
   status: string;
   environment: string;
 };
+
+function LazyTabFallback({ label = "Tab laden..." }: { label?: string }) {
+  return <div className="lazy-tab-fallback">{label}</div>;
+}
+
+function DeferredRender({
+  children,
+  minHeight = 280,
+}: {
+  children: ReactNode;
+  minHeight?: number;
+}) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const [shouldRender, setShouldRender] = useState(false);
+
+  useEffect(() => {
+    if (shouldRender) {
+      return;
+    }
+    const element = ref.current;
+    if (!element) {
+      return;
+    }
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting) {
+          setShouldRender(true);
+          observer.disconnect();
+        }
+      },
+      { rootMargin: "640px 0px" },
+    );
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [shouldRender]);
+
+  if (shouldRender) {
+    return <>{children}</>;
+  }
+
+  return (
+    <div
+      ref={ref}
+      className="deferred-panel-placeholder"
+      style={{ minHeight }}
+    >
+      Sectie wordt geladen wanneer je verder scrolt.
+    </div>
+  );
+}
 
 type EtimClassSummary = {
   id: string;
@@ -3895,64 +3956,66 @@ export default function App() {
             </button>
           </div>
           {libraryTab === "workbench" ? (
-            <LibraryInterfaceWorkbench
-              classes={classes}
-              typicals={typicals}
-              selectedTypicalId={selectedTypicalId}
-              selectedClassId={selectedClassId}
-              selectedClass={selectedClass}
-              classDetail={classDetail}
-              mode={mode}
-              selectedTypicalStatus={selectedTypicalStatus}
-              selectedTypicalVersion={selectedTypicalVersion}
-              typicalName={typicalName}
-              typicalCode={typicalCode}
-              typicalDescription={typicalDescription}
-              definitions={definitions}
-              interfaceGroups={interfaceGroups}
-              interfaceMappingRules={interfaceMappingRules}
-              interfaces={interfaces}
-              disabledInterfaceCodes={disabledInterfaceCodes}
-              derivationRows={workbenchDerivationRows}
-              validationIssues={validation?.issues ?? []}
-              isReleasedTypical={isReleasedTypical}
-              submitting={submitting}
-              validating={validating}
-              loadingTypical={loadingTypical}
-              onSelectClass={(classId) => {
-                if (!confirmDiscardChanges()) {
-                  return;
-                }
-                setSelectedClassId(classId);
-                if (mode === "create") {
-                  setSelectedTypicalId(null);
-                }
-                setSavedSnapshot("");
-              }}
-              onTypicalNameChange={setTypicalName}
-              onTypicalCodeChange={setTypicalCode}
-              onTypicalDescriptionChange={setTypicalDescription}
-              onAddLocalParameter={addLocalParameter}
-              onUpdateDefinition={updateDefinition}
-              onAddInterfaceGroup={addInterfaceGroup}
-              onUpdateInterfaceGroup={updateInterfaceGroup}
-              onDeleteInterfaceGroup={deleteInterfaceGroup}
-              onAddInterfaceMappingRule={addInterfaceMappingRule}
-              onUpdateInterfaceMappingRule={updateInterfaceMappingRule}
-              onDeleteInterfaceMappingRule={deleteInterfaceMappingRule}
-              onUpdateInterfaceLayout={updateWorkbenchInterfaceLayout}
-              onDisableInterface={disableWorkbenchInterface}
-              onRestoreInterface={restoreWorkbenchInterface}
-              onAddOverrideInterface={addOverrideInterface}
-              onUpdateInterfaceOverride={updateInterface}
-              onDeleteInterfaceOverride={deleteInterface}
-              onNewTypical={handleNewTypical}
-              onSaveTypical={handleSaveTypical}
-              onValidateTypical={handleValidateTypical}
-              onReleaseTypical={handleReleaseTypical}
-              onCreateDraftFromReleased={handleCreateDraftFromReleased}
-              onOpenTypical={(typicalId) => void handleEditTypical(typicalId)}
-            />
+            <Suspense fallback={<LazyTabFallback label="Interface Workbench laden..." />}>
+              <LibraryInterfaceWorkbench
+                classes={classes}
+                typicals={typicals}
+                selectedTypicalId={selectedTypicalId}
+                selectedClassId={selectedClassId}
+                selectedClass={selectedClass}
+                classDetail={classDetail}
+                mode={mode}
+                selectedTypicalStatus={selectedTypicalStatus}
+                selectedTypicalVersion={selectedTypicalVersion}
+                typicalName={typicalName}
+                typicalCode={typicalCode}
+                typicalDescription={typicalDescription}
+                definitions={definitions}
+                interfaceGroups={interfaceGroups}
+                interfaceMappingRules={interfaceMappingRules}
+                interfaces={interfaces}
+                disabledInterfaceCodes={disabledInterfaceCodes}
+                derivationRows={workbenchDerivationRows}
+                validationIssues={validation?.issues ?? []}
+                isReleasedTypical={isReleasedTypical}
+                submitting={submitting}
+                validating={validating}
+                loadingTypical={loadingTypical}
+                onSelectClass={(classId) => {
+                  if (!confirmDiscardChanges()) {
+                    return;
+                  }
+                  setSelectedClassId(classId);
+                  if (mode === "create") {
+                    setSelectedTypicalId(null);
+                  }
+                  setSavedSnapshot("");
+                }}
+                onTypicalNameChange={setTypicalName}
+                onTypicalCodeChange={setTypicalCode}
+                onTypicalDescriptionChange={setTypicalDescription}
+                onAddLocalParameter={addLocalParameter}
+                onUpdateDefinition={updateDefinition}
+                onAddInterfaceGroup={addInterfaceGroup}
+                onUpdateInterfaceGroup={updateInterfaceGroup}
+                onDeleteInterfaceGroup={deleteInterfaceGroup}
+                onAddInterfaceMappingRule={addInterfaceMappingRule}
+                onUpdateInterfaceMappingRule={updateInterfaceMappingRule}
+                onDeleteInterfaceMappingRule={deleteInterfaceMappingRule}
+                onUpdateInterfaceLayout={updateWorkbenchInterfaceLayout}
+                onDisableInterface={disableWorkbenchInterface}
+                onRestoreInterface={restoreWorkbenchInterface}
+                onAddOverrideInterface={addOverrideInterface}
+                onUpdateInterfaceOverride={updateInterface}
+                onDeleteInterfaceOverride={deleteInterface}
+                onNewTypical={handleNewTypical}
+                onSaveTypical={handleSaveTypical}
+                onValidateTypical={handleValidateTypical}
+                onReleaseTypical={handleReleaseTypical}
+                onCreateDraftFromReleased={handleCreateDraftFromReleased}
+                onOpenTypical={(typicalId) => void handleEditTypical(typicalId)}
+              />
+            </Suspense>
           ) : null}
           {libraryTab === "typicals" ? (
           <form className="search-row" onSubmit={handleSearch}>
@@ -4114,6 +4177,7 @@ export default function App() {
                 </div>
               </div>
 
+              <DeferredRender minHeight={360}>
               <div className="editor-panel">
                 <div className="editor-header">
                   <div>
@@ -4150,6 +4214,7 @@ export default function App() {
                   )}
                 </div>
               </div>
+              </DeferredRender>
             </div>
           </div>
           ) : null}
@@ -4241,6 +4306,7 @@ export default function App() {
           ) : null}
 
           {libraryTab === "typicals" && mode === "edit" && selectedTypicalLineageId ? (
+            <DeferredRender minHeight={260}>
             <div className="governance-panel">
               <div className="editor-header">
                 <h3>Library placement</h3>
@@ -4299,9 +4365,11 @@ export default function App() {
                 </>
               )}
             </div>
+            </DeferredRender>
           ) : null}
 
           {libraryTab === "typicals" ? (
+          <DeferredRender minHeight={360}>
           <div className={`governance-panel${isReleasedTypical ? " read-only-panel" : ""}`}>
             <div className="editor-header">
               <h3>Parameter governance</h3>
@@ -4368,9 +4436,11 @@ export default function App() {
               </button>
             </div>
           </div>
+          </DeferredRender>
           ) : null}
 
           {libraryTab === "typicals" ? (
+          <DeferredRender minHeight={260}>
           <div className={`interfaces-panel${isReleasedTypical ? " read-only-panel" : ""}`}>
             <div className="editor-header">
               <h3>Interface mappings</h3>
@@ -4395,6 +4465,7 @@ export default function App() {
               </div>
             )}
           </div>
+          </DeferredRender>
           ) : null}
 
           {libraryTab === "presets" ? (
@@ -4598,6 +4669,7 @@ export default function App() {
           ) : null}
 
           {libraryTab === "typicals" ? (
+          <DeferredRender minHeight={460}>
           <div className={`interfaces-panel${isReleasedTypical ? " read-only-panel" : ""}`}>
             <div className="editor-header">
               <h3>Interfaces</h3>
@@ -4672,9 +4744,11 @@ export default function App() {
               </button>
             </div>
           </div>
+          </DeferredRender>
           ) : null}
 
           {libraryTab === "typicals" && mode === "edit" && typicalVersions.length > 0 ? (
+            <DeferredRender minHeight={220}>
             <div className="governance-panel">
               <div className="editor-header">
                 <h3>Versies</h3>
@@ -4702,9 +4776,11 @@ export default function App() {
                 ))}
               </div>
             </div>
+            </DeferredRender>
           ) : null}
 
           {libraryTab === "typicals" ? (
+          <DeferredRender minHeight={220}>
           <div className="validation-panel">
             <div className="editor-header">
               <h3>Validatie</h3>
@@ -4738,6 +4814,7 @@ export default function App() {
               </div>
             )}
           </div>
+          </DeferredRender>
           ) : null}
 
           <ul>
@@ -4748,11 +4825,17 @@ export default function App() {
           </ul>
         </section>
         ) : workspaceMode === "etim" ? (
-          <EtimWorkspace apiBaseUrl={apiBaseUrl} />
+          <Suspense fallback={<LazyTabFallback label="ETIM workspace laden..." />}>
+            <EtimWorkspace apiBaseUrl={apiBaseUrl} />
+          </Suspense>
         ) : workspaceMode === "wiki" ? (
-          <WikiWorkspace />
+          <Suspense fallback={<LazyTabFallback label="Wiki laden..." />}>
+            <WikiWorkspace />
+          </Suspense>
         ) : (
-          <ProjectWorkspace apiBaseUrl={apiBaseUrl} />
+          <Suspense fallback={<LazyTabFallback label="Project workspace laden..." />}>
+            <ProjectWorkspace apiBaseUrl={apiBaseUrl} />
+          </Suspense>
         )}
       </section>
       <Menu

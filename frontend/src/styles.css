@@ -163,6 +163,26 @@ h1 {
   background: #ffffff;
 }
 
+.lazy-tab-fallback {
+  margin-top: 14px;
+  padding: 16px;
+  border: 1px solid rgba(23, 32, 42, 0.08);
+  border-radius: 12px;
+  background: #ffffff;
+  color: #536471;
+  font-size: 0.92rem;
+}
+
+.deferred-panel-placeholder {
+  margin-top: 14px;
+  padding: 14px 16px;
+  border: 1px dashed rgba(23, 32, 42, 0.12);
+  border-radius: 14px;
+  background: #fbfcfd;
+  color: #536471;
+  font-size: 0.88rem;
+}
+
 .editor-header {
   display: flex;
   align-items: center;
@@ -495,6 +515,24 @@ h1 {
   border: 1px solid rgba(23, 32, 42, 0.08);
   border-radius: 16px;
   background: #ffffff;
+}
+
+@supports (content-visibility: auto) {
+  .workspace-detail > .editor-panel,
+  .workspace-detail > .governance-panel,
+  .workspace-detail > .interfaces-panel,
+  .workspace-detail > .validation-panel,
+  .roadmap-card > .governance-panel,
+  .roadmap-card > .interfaces-panel,
+  .roadmap-card > .validation-panel {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 360px;
+  }
+
+  .workspace-sidebar .editor-panel {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 280px;
+  }
 }
 
 .validation-list {
